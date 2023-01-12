@@ -1,7 +1,7 @@
 from airflow import DAG
 from airflow.operators.email_operator import EmailOperator
-from airflow.providers.amazon.aws.operators.glue import AwsGlueJobOperator
-from airflow.providers.amazon.aws.operators.s3_delete_objects import S3DeleteObjectsOperator
+# from airflow.providers.amazon.aws.operators.glue import AwsGlueJobOperator
+# from airflow.providers.amazon.aws.operators.s3_delete_objects import S3DeleteObjectsOperator
 from datetime import datetime, timedelta
 import boto3
 from airflow.operators.python_operator import PythonOperator
@@ -11,7 +11,7 @@ from airflow.models import Variable
 
 
 
-client = boto3.client('glue')
+# client = boto3.client('glue')
 
 ##########################################################
 # CONSTANTS AND GLOBAL VARIABLES DEFINITION
