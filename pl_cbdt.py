@@ -32,7 +32,7 @@ end_flow = DummyOperator(
     dag=dag)
 
 cbdt_sftpToRaw = AwsGlueJobOperator(
-    job_name: str = "cbdt_sftpToRaw",
+    job_name = "cbdt_sftpToRaw",
     #job_desc: str = "AWS Glue Job with Airflow",
     #script_location: str | None = None,
     #concurrent_run_limit: int | None = None,
