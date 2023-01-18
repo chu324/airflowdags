@@ -4,7 +4,7 @@
 
 from airflow import DAG
 from datetime import datetime
-from airflow.providers.amazon.aws.operators.glue import AwsGlueJobOperator
+from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
 from airflow.operators.dummy_operator import DummyOperator
 
 
@@ -35,7 +35,7 @@ end_flow = DummyOperator(
     task_id='end_flow',
     dag=dag)
 
-cbdt_sftpToRaw = AwsGlueJobOperator(
+cbdt_sftpToRaw = GlueJobOperator(
     job_name = "cbdt_sftpToRaw",
     #job_desc: str = "AWS Glue Job with Airflow",
     #script_location: str | None = None,
