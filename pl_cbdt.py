@@ -1,3 +1,7 @@
+## author: qchu
+## version: 1.0
+## updated_date: 2023-01-18 11:02AM
+
 from airflow import DAG
 from datetime import datetime
 from airflow.providers.amazon.aws.operators.glue import AwsGlueJobOperator
