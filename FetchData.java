@@ -61,10 +61,18 @@ public class FetchData {
 
         // 初始化 raw 文件路径
         String rawDirPath = "data/raw/" + taskDateStr;
+        File rawDir = new File(rawDirPath);
+        if (!rawDir.exists()) {
+            rawDir.mkdirs(); // 创建目录
+        }
         rawFilePath = rawDirPath + "/wecom_chat_" + taskDateStr + "_raw.csv";
 
         // 初始化 curated 文件路径
         String curatedDirPath = "data/curated/" + taskDateStr;
+        File curatedDir = new File(curatedDirPath);
+        if (!curatedDir.exists()) {
+            curatedDir.mkdirs(); // 创建目录
+        }
         curatedFilePath = curatedDirPath + "/chat_" + taskDateStr + ".csv";
 
         // 阶段 1: 拉取数据
@@ -512,8 +520,8 @@ public class FetchData {
             String[] fields;
             boolean isHeader = true;
 
-            // 创建线程池，并行度为 10
-            ExecutorService executorService = Executors.newFixedThreadPool(10);
+            // 创建线程池，并行度为 100
+            ExecutorService executorService = Executors.newFixedThreadPool(100);
 
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
