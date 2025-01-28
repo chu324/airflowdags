@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.Collections;
@@ -505,7 +506,6 @@ public class FetchData {
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
     
-        final int totalMediaFiles;
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
         List<String> failureDetails = Collections.synchronizedList(new ArrayList<>());
@@ -513,9 +513,10 @@ public class FetchData {
         // 创建定时任务，每 5 分钟输出一次统计信息
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
+            int totalProcessed = successCount.get() + failureCount.get();
             logger.info(String.format(
                 "[媒体文件下载进度] 总文件数=%d, 成功=%d, 失败=%d",
-                totalMediaFiles, successCount.get(), failureCount.get()
+                totalProcessed, successCount.get(), failureCount.get()
             ));
             if (!failureDetails.isEmpty()) {
                 logger.info("当前失败的文件: " + String.join("; ", failureDetails));
@@ -535,6 +536,7 @@ public class FetchData {
             // 创建线程池，并行度为 100
             ExecutorService executorService = Executors.newFixedThreadPool(100);
     
+            int totalMediaFiles = 0;
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
                     isHeader = false;
@@ -545,6 +547,8 @@ public class FetchData {
                     logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
                     continue;
                 }
+
+                totalMediaFiles++;
     
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
@@ -566,29 +570,28 @@ public class FetchData {
             // 关闭定时任务
             scheduler.shutdown();
     
-        } catch (IOException | CsvValidationException | InterruptedException e) {
+            logger.info(String.format(
+                "[媒体文件下载完成] 总文件数=%d, 成功=%d, 失败=%d",
+                totalMediaFiles, successCount.get(), failureCount.get()
+            ));
+    
+            // 输出失败详情
+            if (!failureDetails.isEmpty()) {
+                logger.info("失败的文件: " + String.join("; ", failureDetails));
+            }
+    
+            if (failureCount.get() > 0) {
+                logger.severe("部分媒体文件下载失败，请检查日志！");
+                allFilesDownloaded = false;
+            }
+    
+            logger.info("所有媒体文件已处理完成");
+            return allFilesDownloaded;
+
+        } catch (IOException | CsvValidationException |InterruptedException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             return false;
         }
-    
-        totalMediaFiles = successCount.get() + failureCount.get();
-        logger.info(String.format(
-            "[媒体文件下载完成] 总文件数=%d, 成功=%d, 失败=%d",
-            totalMediaFiles, successCount.get(), failureCount.get()
-        ));
-    
-        // 输出失败详情
-        if (!failureDetails.isEmpty()) {
-            logger.info("失败的文件: " + String.join("; ", failureDetails));
-        }
-    
-        if (failureCount.get() > 0) {
-            logger.severe("部分媒体文件下载失败，请检查日志！");
-            allFilesDownloaded = false;
-        }
-    
-        logger.info("所有媒体文件已处理完成");
-        return allFilesDownloaded;
     }
 
     private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype,
@@ -827,6 +830,7 @@ public class FetchData {
         AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
                 .withCredentials(new InstanceProfileCredentialsProvider(false))
                 .withRegion("cn-north-1")
+                .withRetryPolicy(RetryPolicies.DEFAULT)
                 .build();
 
         try {
