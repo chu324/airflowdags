@@ -1,13 +1,18 @@
 package com.tencent.wework;
 
-import com.amazonaws.auth.InstanceProfileCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.PutObjectRequest;
-import com.amazonaws.services.sns.AmazonSNS;
-import com.amazonaws.services.sns.AmazonSNSClientBuilder;
-import com.amazonaws.services.sns.model.PublishRequest;
-import com.amazonaws.services.sns.model.PublishResult;
+import software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider;
+import software.amazon.awssdk.core.retry.RetryPolicy;
+import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
+import software.amazon.awssdk.services.sns.model.PublishResponse;
+import software.amazon.awssdk.services.sns.model.SnsException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.CSVReader;
@@ -24,6 +29,7 @@ import java.util.Arrays;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import java.util.logging.Logger;
+import java.util.logging.Level;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.List;
@@ -40,6 +46,11 @@ import java.util.HashMap;
 import java.util.concurrent.TimeUnit;
 
 public class FetchData {
+    private static final Logger awsLogger = Logger.getLogger("software.amazon.awssdk");
+
+    static {
+        awsLogger.setLevel(Level.INFO);
+    }
     private static final Logger logger = Logger.getLogger(FetchData.class.getName());
     private static final ObjectMapper objectMapper = new ObjectMapper();
     public static String taskDateStr = null; // 用于存储任务开始时的日期
@@ -827,17 +838,26 @@ public class FetchData {
      * 上传文件到 S3
      */
     private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
-        AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
-                .withCredentials(new InstanceProfileCredentialsProvider(false))
-                .withRegion("cn-north-1")
-                .withRetryPolicy(RetryPolicies.DEFAULT)
-                .build();
+        S3Client s3Client = S3Client.builder()
+            .credentialsProvider(InstanceProfileCredentialsProvider.create())
+            .region(Region.CN_NORTH_1)
+            .overrideConfiguration(config -> config.retryPolicy(
+                RetryPolicy.builder()
+                    .numRetries(5) // 最大重试次数
+                    .retryCondition(RetryOnStatusCodeCondition.create(500)) // 仅在状态码为 500 时重试
+                    .build()
+            ))
+            .build();
 
         try {
-            s3Client.putObject(new PutObjectRequest(s3BucketName, s3Key, new File(filePath)));
-            logger.info("媒体文件已成功上传到 S3: " + s3BucketName + "/" + s3Key);
-        } catch (Exception e) {
+            s3Client.putObject(PutObjectRequest.builder()
+                .bucket(s3BucketName)
+                .key(s3Key)
+                .build(), new File(filePath).toPath());
+        } catch (S3Exception e) {
             logger.severe("上传文件到 S3 失败: " + e.getMessage());
+        } finally {
+            s3Client.close();
         }
     }
 
@@ -849,22 +869,25 @@ public class FetchData {
         String snsTopicArn = "arn:aws-cn:sns:cn-north-1:175826060701:wecom_api_connection_alert_notification";
 
         // 创建 SNS 客户端
-        AmazonSNS snsClient = AmazonSNSClientBuilder.standard()
-                .withCredentials(new InstanceProfileCredentialsProvider(false)) // 使用 IAM Role
-                .withRegion("cn-north-1") // 根据实际情况设置区域
-                .build();
+        SnsClient snsClient = SnsClient.builder()
+            .credentialsProvider(InstanceProfileCredentialsProvider.create()) // 使用 IAM Role
+            .region(Region.CN_NORTH_1) // 设置区域
+            .build();
 
         try {
             // 发布消息到 SNS Topic
-            PublishRequest request = new PublishRequest()
-                    .withTopicArn(snsTopicArn)
-                    .withSubject("任务报警: GetChatData 持续失败")
-                    .withMessage(message);
+            PublishRequest request = PublishRequest.builder()
+                .topicArn(snsTopicArn)
+                .subject("任务报警: GetChatData 持续失败")
+                .message(message)
+                .build();
 
-            PublishResult result = snsClient.publish(request);
-            logger.info("SNS 报警消息已发送，MessageId: " + result.getMessageId());
-        } catch (Exception e) {
+            PublishResponse result = snsClient.publish(request);
+            logger.info("SNS 报警消息已发送，MessageId: " + result.messageId());
+        } catch (SnsException e) {
             logger.severe("发送 SNS 报警消息失败: " + e.getMessage());
+        } finally {
+            snsClient.close(); // 关闭 SNS 客户端
         }
     }
 
