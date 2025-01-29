@@ -1,29 +1,47 @@
-package com.tencent.wework;
-
-import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.sns.SnsClient;
-import software.amazon.awssdk.services.sns.model.PublishRequest;
-import software.amazon.awssdk.services.sns.model.PublishResponse;
-import software.amazon.awssdk.services.sns.model.SnsException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.opencsv.CSVReader;
-import com.opencsv.CSVReaderBuilder;
-import com.opencsv.exceptions.CsvValidationException;
-
-import java.io.*;
-import java.nio.file.Paths;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+package com.tencent.wework; 
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider; 
+import software.amazon.awssdk.auth.credentials.AwsCredentials; 
+import software.amazon.awssdk.core.retry.RetryPolicy; 
+import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition; 
+import software.amazon.awssdk.regions.Region; 
+import software.amazon.awssdk.services.s3.S3Client; 
+import software.amazon.awssdk.services.s3.model.PutObjectRequest; 
+import software.amazon.awssdk.services.s3.model.S3Exception; 
+import software.amazon.awssdk.services.sns.SnsClient; 
+import software.amazon.awssdk.services.sns.model.PublishRequest; 
+import software.amazon.awssdk.services.sns.model.PublishResponse; 
+import software.amazon.awssdk.services.sns.model.SnsException; 
+import com.fasterxml.jackson.databind.JsonNode; 
+import com.fasterxml.jackson.databind.ObjectMapper; 
+import com.opencsv.CSVReader; 
+import com.opencsv.CSVReaderBuilder; 
+import com.opencsv.CSVParserBuilder; 
+import com.opencsv.exceptions.CsvValidationException; 
+import java.io.*; 
+import java.nio.file.Paths; 
+import java.time.Instant; 
+import java.time.ZoneId; 
+import java.time.ZonedDateTime; 
+import java.time.format.DateTimeFormatter; 
+import java.util.Arrays; 
+import java.util.zip.ZipEntry; 
+import java.util.zip.ZipOutputStream; 
+import java.util.logging.Logger; 
+import java.util.logging.Level; 
+import java.util.Set; 
+import java.util.HashSet; 
+import java.util.List;
+import java.util.ArrayList; 
+import java.util.concurrent.atomic.AtomicInteger; 
+import java.util.concurrent.ExecutorService; 
+import java.util.concurrent.Executors; 
+import java.util.concurrent.ScheduledExecutorService; 
+import java.util.concurrent.CompletableFuture; 
+import java.util.concurrent.ExecutionException; 
+import java.util.Collections; 
+import java.util.Map; 
+import java.util.HashMap; 
+import java.util.concurrent.TimeUnit;
 
 public class FetchData {
     private static final Logger awsLogger = Logger.getLogger("software.amazon.awssdk");
@@ -741,9 +759,9 @@ public class FetchData {
             uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
 
-            // 删除本地 raw 和 curated 目录下的所有内容
-            deleteDirectoryContents(new File(rawFilePath).getParentFile());
-            deleteDirectoryContents(new File(curatedFilePath).getParentFile());
+            // 删除本地 raw 和 curated 目录下的所有子文件夹
+            deleteDirectoryContents(new File(rawFilePath).getParentFile()); // 清空 raw 目录下的子文件夹
+            deleteDirectoryContents(new File(curatedFilePath).getParentFile()); // 清空 curated 目录下的子文件夹
 
             return true;
         } catch (Exception e) {
@@ -752,18 +770,23 @@ public class FetchData {
         }
     }
 
+    /**
+     * 删除目录下的所有内容
+     */
     private static void deleteDirectoryContents(File directory) {
         if (directory.exists() && directory.isDirectory()) {
             File[] files = directory.listFiles();
             if (files != null) {
                 for (File file : files) {
                     if (file.isDirectory()) {
-                        deleteDirectoryContents(file); // 递归删除子目录
-                    }
-                    if (!file.delete()) {
-                        logger.severe("删除文件失败: " + file.getAbsolutePath());
-                    } else {
-                        logger.info("已删除文件: " + file.getAbsolutePath());
+                        // 递归删除子目录
+                        deleteDirectoryContents(file);
+                        // 在删除子目录内容后，尝试删除子目录本身
+                        if (!file.delete()) {
+                            logger.severe("删除子目录失败: " + file.getAbsolutePath());
+                        } else {
+                            logger.info("已删除子目录: " + file.getAbsolutePath());
+                        }
                     }
                 }
             }
