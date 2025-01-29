@@ -1,6 +1,7 @@
 package com.tencent.wework;
 
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import software.amazon.awssdk.core.retry.RetryPolicy;
 import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition;
 import software.amazon.awssdk.regions.Region;
@@ -19,6 +20,7 @@ import com.opencsv.CSVParserBuilder;
 import com.opencsv.exceptions.CsvValidationException;
 
 import java.io.*;
+import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -832,28 +834,33 @@ public class FetchData {
         }
     }
 
-    /**
-     * 上传文件到 S3
-     */
-    private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
+    public static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
+        // 创建凭证提供者
+        DefaultCredentialsProvider credentialsProvider = DefaultCredentialsProvider.create();
+    
+        // 构建 S3 客户端
         S3Client s3Client = S3Client.builder()
-            .credentialsProvider(DefaultCredentialsProvider.builder().build())
-            .region(Region.CN_NORTH_1)
+            .credentialsProvider(credentialsProvider) // 使用凭证提供者
+            .region(Region.CN_NORTH_1) // 确保区域正确
             .overrideConfiguration(config -> config.retryPolicy(
                 RetryPolicy.builder()
                     .numRetries(5) // 最大重试次数
-                    .retryCondition(RetryOnStatusCodeCondition.create(500)) // 仅在状态码为 500 时重试
+                    .retryCondition(RetryOnStatusCodeCondition.create(403, 500)) // 在 403 或 500 时重试
                     .build()
             ))
             .build();
-
+    
         try {
+            // 上传文件
             s3Client.putObject(PutObjectRequest.builder()
                 .bucket(s3BucketName)
                 .key(s3Key)
-                .build(), new File(filePath).toPath());
+                .build(), Paths.get(filePath));
+            System.out.println("文件上传成功: " + s3Key);
         } catch (S3Exception e) {
-            logger.severe("上传文件到 S3 失败: " + e.getMessage());
+            System.err.println("上传文件到 S3 失败: " + e.awsErrorDetails().errorMessage());
+            System.err.println("HTTP 状态码: " + e.statusCode());
+            System.err.println("错误代码: " + e.awsErrorDetails().errorCode());
         } finally {
             s3Client.close();
         }
