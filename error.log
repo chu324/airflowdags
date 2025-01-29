@@ -1,12 +1,176 @@
-Jan 28, 2025 2:07:58 PM com.tencent.wework.FetchData uploadFileToS3
-INFO: 媒体文件已成功上传到 S3: 175826060701-eds-qa-cn-north-1/raw/wecom_chat/media/image/CtYBMzA2OTAyMDEwMjA0NjIzMDYwMDIwMTAwMDIwNGRiYzRmNDQ3MDIwMzBmNDI0MTAyMDRkYjMwNjZiNDAyMDQ2Nzk4MzlkNzA0MjQzMzYzNjYzMjYxMzkzMjMwMmQ2NTYxMzI2NjJkMzQ2MTY0MzUyZDYxMzkzNjY1MmQ2NDMwMzQzMzMxNjQzMzYxMzI2MzMzNjMwMjAxMDAwMjAzMDUyOTQwMDQxMDM3ODJjYTA5NGViZmI3YmY1ZmU5ZGY0NjgwZjAwMTVjMDIwMTAxMDIwMTAwMDQwMBI4TkRkZk1UWTRPRGcxTXpVME56TTRNVGd6TVY4NE1UYzFNRFkxTUROZk1UY3pPREF5T1RVMU9RPT0aIDQ5ZDdjMTlmYTExZmJiZjQwNzgwZTMwOTQwZDUwYTk2.jpg
-Jan 28, 2025 2:07:58 PM com.tencent.wework.FetchData downloadAndUploadMediaFile
-INFO: 媒体文件已上传到 S3: 175826060701-eds-qa-cn-north-1/raw/wecom_chat/media/image/CtYBMzA2OTAyMDEwMjA0NjIzMDYwMDIwMTAwMDIwNGRiYzRmNDQ3MDIwMzBmNDI0MTAyMDRkYjMwNjZiNDAyMDQ2Nzk4MzlkNzA0MjQzMzYzNjYzMjYxMzkzMjMwMmQ2NTYxMzI2NjJkMzQ2MTY0MzUyZDYxMzkzNjY1MmQ2NDMwMzQzMzMxNjQzMzYxMzI2MzMzNjMwMjAxMDAwMjAzMDUyOTQwMDQxMDM3ODJjYTA5NGViZmI3YmY1ZmU5ZGY0NjgwZjAwMTVjMDIwMTAxMDIwMTAwMDQwMBI4TkRkZk1UWTRPRGcxTXpVME56TTRNVGd6TVY4NE1UYzFNRFkxTUROZk1UY3pPREF5T1RVMU9RPT0aIDQ5ZDdjMTlmYTExZmJiZjQwNzgwZTMwOTQwZDUwYTk2.jpg
-Jan 28, 2025 2:07:58 PM com.tencent.wework.FetchData uploadFileToS3
-INFO: 媒体文件已成功上传到 S3: 175826060701-eds-qa-cn-north-1/raw/wecom_chat/media/image/CqwCMzA4MTkzMDIwMTAyMDQ4MThiMzA4MTg4MDIwMTAwMDIwNGRiYzNmYzkyMDIwMzBmNTVjOTAyMDQwZWZiNTEyYTAyMDQ2Nzk4MzlhYzA0NGM0ZTQ1NTc0OTQ0MzE1ZjY0NjI2MzMzNjY2MzM5MzIzMDY1NjY2MjM1MzEzMjYxMzYzNzM5MzgzMzM5NjE2NDMwMzAzMDMzMzY2NDM4NjY1ZjMzNjQzNDMyMzQ2NDY0MzIyZDMwMzgzMTYzMmQzNDMyNjUzMTJkNjIzNjM1MzkyZDMzMzQ2MzM2NjI2MzM4NjQzODMzMzAzMzAyMDEwMDAyMDMwYzQxYzAwNDEwMWJmMTgwZGZhY2FlNDQyNmFiNWU2ZGNiN2ZlNzljYTUwMjAxMDIwMjAxMDAwNDAwEjhORGRmTVRZNE9EZzFNelUwTnpNeE9EUXhPRjh4TkRnMk9UWXdORE13WHpFM016Z3dNamsxTlRrPRogNjA2Y2VmODE0OWE2NGU3ZjllMjlhNjIwNDg4NzVjZjQ=.jpg
-Jan 28, 2025 2:07:58 PM com.tencent.wework.FetchData downloadAndUploadMediaFile
-INFO: 媒体文件已上传到 S3: 175826060701-eds-qa-cn-north-1/raw/wecom_chat/media/image/CqwCMzA4MTkzMDIwMTAyMDQ4MThiMzA4MTg4MDIwMTAwMDIwNGRiYzNmYzkyMDIwMzBmNTVjOTAyMDQwZWZiNTEyYTAyMDQ2Nzk4MzlhYzA0NGM0ZTQ1NTc0OTQ0MzE1ZjY0NjI2MzMzNjY2MzM5MzIzMDY1NjY2MjM1MzEzMjYxMzYzNzM5MzgzMzM5NjE2NDMwMzAzMDMzMzY2NDM4NjY1ZjMzNjQzNDMyMzQ2NDY0MzIyZDMwMzgzMTYzMmQzNDMyNjUzMTJkNjIzNjM1MzkyZDMzMzQ2MzM2NjI2MzM4NjQzODMzMzAzMzAyMDEwMDAyMDMwYzQxYzAwNDEwMWJmMTgwZGZhY2FlNDQyNmFiNWU2ZGNiN2ZlNzljYTUwMjAxMDIwMjAxMDAwNDAwEjhORGRmTVRZNE9EZzFNelUwTnpNeE9EUXhPRjh4TkRnMk9UWXdORE13WHpFM016Z3dNamsxTlRrPRogNjA2Y2VmODE0OWE2NGU3ZjllMjlhNjIwNDg4NzVjZjQ=.jpg
-Jan 28, 2025 2:07:58 PM com.tencent.wework.FetchData uploadFileToS3
-INFO: 媒体文件已成功上传到 S3: 175826060701-eds-qa-cn-north-1/raw/wecom_chat/media/image/CtYBMzA2OTAyMDEwMjA0NjIzMDYwMDIwMTAwMDIwNGRiYzRmNDQ3MDIwMzBmNDI0MTAyMDRkYjMwNjZiNDAyMDQ2Nzk4MzlkNzA0MjQzMzYzNjYzMjYxMzkzMjMwMmQ2NTYxMzI2NjJkMzQ2MTY0MzUyZDYxMzkzNjY1MmQ2NDMwMzQzMzMxNjQzMzYxMzI2MzMzNjMwMjAxMDAwMjAzMDUyOTQwMDQxMDM3ODJjYTA5NGViZmI3YmY1ZmU5ZGY0NjgwZjAwMTVjMDIwMTAxMDIwMTAwMDQwMBI4TkRkZk1UWTRPRGcxTXpVME56TTRNVGd6TVY4eU1UUXdNRGN6TkRaZk1UY3pPREF5T1RVMU9RPT0aIDQ5ZDdjMTlmYTExZmJiZjQwNzgwZTMwOTQwZDUwYTk2.jpg
-Jan 28, 2025 2:07:58 PM com.tencent.wework.FetchData downloadAndUploadMediaFile
-INFO: 媒体文件已上传到 S3: 175826060701-eds-qa-cn-north-1/raw/wecom_chat/media/image/CtYBMzA2OTAyMDEwMjA0NjIzMDYwMDIwMTAwMDIwNGRiYzRmNDQ3MDIwMzBmNDI0MTAyMDRkYjMwNjZiNDAyMDQ2Nzk4MzlkNzA0MjQzMzYzNjYzMjYxMzkzMjMwMmQ2NTYxMzI2NjJkMzQ2MTY0MzUyZDYxMzkzNjY1MmQ2NDMwMzQzMzMxNjQzMzYxMzI2MzMzNjMwMjAxMDAwMjAzMDUyOTQwMDQxMDM3ODJjYTA5NGViZmI3YmY1ZmU5ZGY0NjgwZjAwMTVjMDIwMTAxMDIwMTAwMDQwMBI4TkRkZk1UWTRPRGcxTXpVME56TTRNVGd6TVY4eU1UUXdNRGN6TkRaZk1UY3pPREF5T1RVMU9RPT0aIDQ5ZDdjMTlmYTExZmJiZjQwNzgwZTMwOTQwZDUwYTk2.jpg
+在设计并发的媒体文件下载的重试机制时，我们需要考虑以下几个关键点：
+
+并发控制：由于媒体文件下载是并发进行的，重试机制需要确保不会因为重试而导致资源耗尽或系统过载。
+
+重试间隔：与下载 raw 文件类似，媒体文件下载也需要设置合理的重试间隔（如 10 秒）。
+
+最大重试时间：为每个下载任务设置最大重试时间（如 30 分钟），超过该时间后触发报警。
+
+任务隔离：每个媒体文件的下载任务应该是独立的，重试机制不应影响其他任务的执行。
+
+报警机制：在重试超时后，触发报警，但需要避免重复报警或报警风暴。
+
+以下是针对并发媒体文件下载的重试机制设计：
+
+1. 重试机制的核心设计
+每个任务独立重试：每个媒体文件的下载任务都有自己的重试状态（如重试次数、重试开始时间等）。
+
+重试间隔：每次重试之间间隔 10 秒。
+
+最大重试时间：每个任务的最大重试时间为 30 分钟，超过后触发报警。
+
+任务状态管理：使用线程安全的容器（如 ConcurrentHashMap）来管理每个任务的重试状态。
+
+2. 实现方案
+以下是具体的实现方案：
+
+2.1 定义任务状态类
+为每个下载任务定义一个状态类，用于记录重试信息：
+
+java
+复制
+class DownloadTaskState {
+    private String sdkfileid; // 任务标识
+    private long retryStartTime; // 重试开始时间
+    private int retryCount; // 重试次数
+
+    public DownloadTaskState(String sdkfileid) {
+        this.sdkfileid = sdkfileid;
+        this.retryStartTime = System.currentTimeMillis();
+        this.retryCount = 0;
+    }
+
+    public boolean shouldRetry() {
+        long currentTime = System.currentTimeMillis();
+        return (currentTime - retryStartTime) < TimeUnit.MINUTES.toMillis(30); // 30 分钟内重试
+    }
+
+    public void incrementRetryCount() {
+        retryCount++;
+    }
+
+    public int getRetryCount() {
+        return retryCount;
+    }
+
+    public String getSdkfileid() {
+        return sdkfileid;
+    }
+}
+2.2 使用线程安全的容器管理任务状态
+使用 ConcurrentHashMap 来存储每个任务的状态：
+
+java
+复制
+ConcurrentHashMap<String, DownloadTaskState> taskStateMap = new ConcurrentHashMap<>();
+2.3 重试逻辑实现
+在 downloadAndUploadMediaFile 方法中，加入重试逻辑：
+
+java
+复制
+private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype,
+                                                  AtomicInteger successCount, AtomicInteger failureCount,
+                                                  List<String> failureDetails) {
+    // 初始化任务状态
+    DownloadTaskState taskState = taskStateMap.computeIfAbsent(sdkfileid, k -> new DownloadTaskState(sdkfileid));
+
+    while (taskState.shouldRetry()) {
+        try {
+            // 尝试下载媒体文件
+            boolean success = attemptDownload(sdk, sdkfileid, msgtype);
+            if (success) {
+                successCount.incrementAndGet();
+                taskStateMap.remove(sdkfileid); // 下载成功，移除任务状态
+                return true;
+            } else {
+                // 下载失败，增加重试次数
+                taskState.incrementRetryCount();
+                logger.warning("下载失败，重试中: sdkfileid=" + sdkfileid + ", 重试次数=" + taskState.getRetryCount());
+                Thread.sleep(TimeUnit.SECONDS.toMillis(10)); // 重试间隔 10 秒
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.severe("线程被中断: sdkfileid=" + sdkfileid);
+            failureCount.incrementAndGet();
+            failureDetails.add("sdkfileid=" + sdkfileid);
+            return false;
+        } catch (Exception e) {
+            logger.severe("下载失败: sdkfileid=" + sdkfileid + ", 错误: " + e.getMessage());
+            failureCount.incrementAndGet();
+            failureDetails.add("sdkfileid=" + sdkfileid);
+            return false;
+        }
+    }
+
+    // 重试超时，触发报警
+    logger.severe("下载重试超时: sdkfileid=" + sdkfileid);
+    sendSNSErrorMessage("媒体文件下载重试超时: sdkfileid=" + sdkfileid);
+    failureCount.incrementAndGet();
+    failureDetails.add("sdkfileid=" + sdkfileid);
+    taskStateMap.remove(sdkfileid); // 移除任务状态
+    return false;
+}
+
+private static boolean attemptDownload(long sdk, String sdkfileid, String msgtype) {
+    // 实现具体的下载逻辑
+    // 返回 true 表示下载成功，false 表示下载失败
+    // 这里可以调用 Finance.GetMediaData 等方法
+    return false; // 示例返回值
+}
+2.4 报警机制优化
+为了避免重复报警，可以在 sendSNSErrorMessage 方法中加入去重逻辑。例如，使用一个集合记录已经报警的 sdkfileid，避免对同一个文件重复报警：
+
+java
+复制
+Set<String> notifiedFiles = Collections.synchronizedSet(new HashSet<>());
+
+private static void sendSNSErrorMessage(String message) {
+    // 提取 sdkfileid
+    String sdkfileid = extractSdkfileidFromMessage(message);
+
+    // 检查是否已经报警
+    if (notifiedFiles.contains(sdkfileid)) {
+        return; // 已经报警，不再重复发送
+    }
+
+    // 发送报警
+    SnsClient snsClient = SnsClient.builder()
+        .credentialsProvider(DefaultCredentialsProvider.builder().build())
+        .region(Region.CN_NORTH_1)
+        .build();
+
+    try {
+        PublishRequest request = PublishRequest.builder()
+            .topicArn("arn:aws-cn:sns:cn-north-1:175826060701:wecom_api_connection_alert_notification")
+            .subject("任务报警: 媒体文件下载失败")
+            .message(message)
+            .build();
+
+        PublishResponse result = snsClient.publish(request);
+        logger.info("SNS 报警消息已发送，MessageId: " + result.messageId());
+        notifiedFiles.add(sdkfileid); // 记录已报警的文件
+    } catch (SnsException e) {
+        logger.severe("发送 SNS 报警消息失败: " + e.getMessage());
+    } finally {
+        snsClient.close();
+    }
+}
+
+private static String extractSdkfileidFromMessage(String message) {
+    // 从消息中提取 sdkfileid
+    // 示例实现：假设消息格式为 "媒体文件下载重试超时: sdkfileid=xxx"
+    return message.substring(message.lastIndexOf("=") + 1);
+}
+3. 总结
+通过上述设计，我们可以为并发的媒体文件下载任务实现类似 raw 文件下载的重试机制：
+
+每个任务独立重试：每个媒体文件下载任务都有自己的重试状态，互不干扰。
+
+重试间隔和最大重试时间：每次重试间隔 10 秒，最大重试时间为 30 分钟。
+
+报警去重：避免对同一个文件重复发送报警。
+
+线程安全：使用 ConcurrentHashMap 和 synchronizedSet 确保线程安全。
+
+这种设计既能保证任务的并发性，又能有效控制重试和报警的频率，避免系统过载和报警风暴。
+按照这个设计思路，修改代码，返回完整的优化后脚本给我
