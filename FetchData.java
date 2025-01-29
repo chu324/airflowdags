@@ -1,10 +1,6 @@
 package com.tencent.wework;
 
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
-import software.amazon.awssdk.auth.credentials.AwsCredentials;
-import software.amazon.awssdk.core.retry.RetryPolicy;
-import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -16,7 +12,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
-import com.opencsv.CSVParserBuilder;
 import com.opencsv.exceptions.CsvValidationException;
 
 import java.io.*;
@@ -25,25 +20,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
-import java.util.logging.Logger;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.logging.Level;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.Collections;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
 public class FetchData {
     private static final Logger awsLogger = Logger.getLogger("software.amazon.awssdk");
@@ -51,6 +31,7 @@ public class FetchData {
     static {
         awsLogger.setLevel(Level.INFO);
     }
+
     private static final Logger logger = Logger.getLogger(FetchData.class.getName());
     private static final ObjectMapper objectMapper = new ObjectMapper();
     public static String taskDateStr = null; // 用于存储任务开始时的日期
@@ -64,6 +45,15 @@ public class FetchData {
 
     // 定义 curated 文件路径
     private static String curatedFilePath = null;
+
+    // 统计变量
+    private static final AtomicInteger totalProcessed = new AtomicInteger(0);
+    private static final AtomicInteger successCount = new AtomicInteger(0);
+    private static final AtomicInteger failureCount = new AtomicInteger(0);
+    private static final List<String> failureDetails = Collections.synchronizedList(new ArrayList<>());
+
+    // 定时任务
+    private static ScheduledExecutorService scheduler;
 
     public static boolean fetchNewData(long sdk) {
         // 设置任务日期
@@ -111,9 +101,6 @@ public class FetchData {
         return true;
     }
 
-    /**
-     * 阶段 1: 拉取数据
-     */
     private static boolean fetchData(long sdk) {
         int limit = 100; // 每次拉取的数据量
         int lastSeq = SeqHistoryUtil.loadLastSeq(); // 从 seq history log 中加载上次拉取的 seqid
@@ -387,9 +374,6 @@ public class FetchData {
         return true;
     }
 
-    /**
-     * 解密数据
-     */
     private static String decryptData(long sdk, String encryptRandomKey, String encryptChatMsg) {
         try {
             // Base64 解码 encrypt_random_key
@@ -418,9 +402,6 @@ public class FetchData {
         }
     }
 
-    /**
-     * 提取消息内容
-     */
     private static String extractContent(JsonNode rootNode, String msgtype) {
         try {
             switch (msgtype) {
@@ -458,9 +439,6 @@ public class FetchData {
         }
     }
 
-    /**
-     * 提取 sdkfileid
-     */
     private static String extractSeqFileId(JsonNode rootNode, String msgtype) {
         // 定义包含 sdkfileid 的有效 msgtype 集合
         Set<String> validMsgTypes = new HashSet<>(Arrays.asList(
@@ -498,9 +476,6 @@ public class FetchData {
         }
     }
 
-    /**
-     * 转义 CSV 字段并用双引号包裹
-     */
     private static String escapeCsvField(String field) {
         if (field == null) {
             return "\"\"";
@@ -513,117 +488,108 @@ public class FetchData {
 
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
-    
+
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
-    
-        AtomicInteger successCount = new AtomicInteger(0);
-        AtomicInteger failureCount = new AtomicInteger(0);
-        List<String> failureDetails = Collections.synchronizedList(new ArrayList<>());
-    
-        // 创建定时任务，每 5 分钟输出一次统计信息
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+        // 初始化统计变量
+        totalProcessed.set(0);
+        successCount.set(0);
+        failureCount.set(0);
+        failureDetails.clear();
+
+        // 创建定时任务，每分钟输出进度状态
+        scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
-            int totalProcessed = successCount.get() + failureCount.get();
-            logger.info(String.format(
-                "[媒体文件下载进度] 总文件数=%d, 成功=%d, 失败=%d",
-                totalProcessed, successCount.get(), failureCount.get()
-            ));
-            if (!failureDetails.isEmpty()) {
-                logger.info("当前失败的文件: " + String.join("; ", failureDetails));
-            }
-        }, 5, 5, TimeUnit.MINUTES);
-    
+            int total = totalProcessed.get();
+            int success = successCount.get();
+            int failure = failureCount.get();
+            logger.info(String.format("[媒体文件上传进度] 总文件数=%d, 成功=%d, 失败=%d", total, success, failure));
+        }, 0, 1, TimeUnit.MINUTES);
+
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
-                    .withQuoteChar('"')
-                    .withEscapeChar('\\')
-                    .withIgnoreLeadingWhiteSpace(true)
-                    .build())
+                        .withQuoteChar('"')
+                        .withEscapeChar('\\')
+                        .withIgnoreLeadingWhiteSpace(true)
+                        .build())
                 .build()) {
             String[] fields;
             boolean isHeader = true;
-    
+
             // 创建线程池，并行度为 100
             ExecutorService executorService = Executors.newFixedThreadPool(100);
-    
+
             int totalMediaFiles = 0;
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
                     isHeader = false;
                     continue;
                 }
-    
+
                 if (fields.length < 2) {
                     logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
                     continue;
                 }
 
                 totalMediaFiles++;
-    
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
-    
+
                 // 提交任务到线程池
                 executorService.submit(() -> {
-                    boolean fileDownloaded = downloadAndUploadMediaFile(sdk, sdkfileid, msgtype, successCount, failureCount, failureDetails);
-                    if (!fileDownloaded) {
-                        logger.severe("媒体文件下载失败: sdkfileid=" + sdkfileid);
-                        sendSNSErrorMessage("媒体文件下载失败: sdkfileid=" + sdkfileid);
-                    }
+                    boolean fileDownloaded = downloadAndUploadMediaFile(sdk, sdkfileid, msgtype);
+                    logUploadResult(fileDownloaded, sdkfileid);
                 });
             }
-    
+
             // 关闭线程池并等待所有任务完成
             executorService.shutdown();
             executorService.awaitTermination(1, TimeUnit.HOURS); // 根据需求调整超时时间
-    
+
             // 关闭定时任务
             scheduler.shutdown();
-    
-            logger.info(String.format(
-                "[媒体文件下载完成] 总文件数=%d, 成功=%d, 失败=%d",
-                totalMediaFiles, successCount.get(), failureCount.get()
-            ));
-    
+
+            logger.info(String.format("[媒体文件下载完成] 总文件数=%d, 成功=%d, 失败=%d",
+                    totalMediaFiles, successCount.get(), failureCount.get()));
+
             // 输出失败详情
             if (!failureDetails.isEmpty()) {
-                logger.info("失败的文件: " + String.join("; ", failureDetails));
+                logger.info("失败的文件列表:");
+                for (String failure : failureDetails) {
+                    logger.info("- " + failure);
+                }
             }
-    
+
             if (failureCount.get() > 0) {
                 logger.severe("部分媒体文件下载失败，请检查日志！");
                 allFilesDownloaded = false;
             }
-    
+
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
 
-        } catch (IOException | CsvValidationException |InterruptedException e) {
+        } catch (IOException | CsvValidationException | InterruptedException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             return false;
         }
     }
 
-    private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype,
-                                                      AtomicInteger successCount, AtomicInteger failureCount,
-                                                      List<String> failureDetails) {
+    private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype) {
         if (sdkfileid == null || sdkfileid.isEmpty()) {
             logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
-            failureCount.incrementAndGet();
-            failureDetails.add("sdkfileid=" + sdkfileid);
             return false;
         }
-    
+
         String indexbuf = ""; // 首次调用时不需要填写
         boolean isFinished = false;
-    
+
         // 重试机制相关变量
         final long RETRY_INTERVAL = 10 * 1000; // 重试间隔：10秒
         final long MAX_RETRY_TIME = 30 * 60 * 1000; // 最大重试时间：30分钟
         long retryStartTime = System.currentTimeMillis(); // 重试开始时间
         boolean isInRetryPeriod = false; // 是否处于重试状态
-    
+
         // 创建临时文件
         File tempFile = null;
         try {
@@ -632,7 +598,7 @@ public class FetchData {
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
                     int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
-    
+
                     if (ret != 0) {
                         if (ret == 10001) {
                             // 如果当前不处于重试状态，则开始记录重试时间
@@ -641,55 +607,49 @@ public class FetchData {
                                 retryStartTime = System.currentTimeMillis(); // 记录重试开始时间
                                 logger.info("检测到 ret 10001，开始记录重试时间，retryStartTime: " + retryStartTime);
                             }
-    
+
                             // 计算当前重试已用时间
                             long currentTime = System.currentTimeMillis();
                             long elapsedTime = currentTime - retryStartTime;
                             logger.info("重试中... 当前重试已用时间: " + elapsedTime + "ms, 最大重试时间: " + MAX_RETRY_TIME + "ms");
-    
+
                             if (elapsedTime < MAX_RETRY_TIME) {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 重试中...");
                                 Thread.sleep(RETRY_INTERVAL);
                                 continue;
                             } else {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 当前重试超过最大重试时间.");
-                                sendSNSErrorMessage("媒体文件下载失败，sdkfileid=" + sdkfileid + "，超过最大重试时间。");
-                                failureCount.incrementAndGet();
-                                failureDetails.add("sdkfileid=" + sdkfileid);
                                 return false;
                             }
                         } else {
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
-                            sendSNSErrorMessage("媒体文件下载失败，sdkfileid=" + sdkfileid + "，错误码：" + ret);
-                            failureCount.incrementAndGet();
-                            failureDetails.add("sdkfileid=" + sdkfileid);
                             return false;
                         }
                     }
-    
+
                     // 如果成功拉取数据，则标记重试结束
                     if (isInRetryPeriod) {
                         isInRetryPeriod = false; // 退出重试状态
                         retryStartTime = 0; // 重置重试开始时间
                         logger.info("成功拉取数据，当前重试结束。");
                     }
-    
+
                     // 将本次拉取的数据写入临时文件
                     fileOutputStream.write(Finance.GetData(mediaData));
-    
+
                     // 检查是否拉取完成
                     isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
-    
+
                     // 更新索引
                     if (!isFinished) {
                         indexbuf = Finance.GetOutIndexBuf(mediaData);
                     }
-    
+
                     // 释放资源
                     Finance.FreeMediaData(mediaData);
                 }
             }
-    
+
             // 生成 S3 文件路径
             String s3Key;
             if ("unknown".equals(msgtype)) {
@@ -699,22 +659,17 @@ public class FetchData {
                 s3Key = String.format("raw/wecom_chat/media/%s/%s.%s",
                         msgtype, sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
             }
-    
+
             // 上传临时文件到 S3
             uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-            successCount.incrementAndGet();
             return true;
-    
+
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.severe("线程被中断: " + e.getMessage());
-            failureCount.incrementAndGet();
-            failureDetails.add("sdkfileid=" + sdkfileid);
             return false;
         } catch (Exception e) {
             logger.severe("下载或上传媒体文件失败: " + e.getMessage());
-            failureCount.incrementAndGet();
-            failureDetails.add("sdkfileid=" + sdkfileid);
             return false;
         } finally {
             // 删除临时文件
@@ -724,11 +679,18 @@ public class FetchData {
                 }
             }
         }
-}
+    }
 
-    /**
-     * 从文件名中提取文件扩展名
-     */
+    private static void logUploadResult(boolean success, String sdkfileid) {
+        totalProcessed.incrementAndGet();
+        if (success) {
+            successCount.incrementAndGet();
+        } else {
+            failureCount.incrementAndGet();
+            failureDetails.add("文件上传失败: " + sdkfileid);
+        }
+    }
+
     private static String getFileExtension(String fileName) {
         int lastDotIndex = fileName.lastIndexOf('.');
         if (lastDotIndex == -1) {
@@ -737,9 +699,6 @@ public class FetchData {
         return fileName.substring(lastDotIndex + 1);
     }
 
-    /**
-     * 获取媒体文件的原始文件名
-     */
     private static String getOriginalFileName(String sdkfileid, String msgtype) {
         switch (msgtype) {
             case "image":
@@ -793,9 +752,6 @@ public class FetchData {
         }
     }
 
-    /**
-     * 删除目录下的所有内容
-     */
     private static void deleteDirectoryContents(File directory) {
         if (directory.exists() && directory.isDirectory()) {
             File[] files = directory.listFiles();
@@ -816,9 +772,6 @@ public class FetchData {
         }
     }
 
-    /**
-     * 压缩文件为 ZIP
-     */
     private static String compressFile(String filePath, String zipFileName) throws IOException {
         File file = new File(filePath);
         String zipFilePath = file.getParent() + "/" + zipFileName;
@@ -841,22 +794,10 @@ public class FetchData {
         return zipFilePath;
     }
 
-    /**
-     * 删除本地文件
-     */
-    private static void deleteLocalFile(String filePath) {
-        File file = new File(filePath);
-        if (file.delete()) {
-            logger.info("本地文件已删除: " + filePath);
-        } else {
-            logger.severe("删除本地文件失败: " + filePath);
-        }
-    }
-
-    public static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
+    private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
         // 创建凭证提供者
         DefaultCredentialsProvider credentialsProvider = DefaultCredentialsProvider.create();
-    
+
         // 构建 S3 客户端
         S3Client s3Client = S3Client.builder()
             .credentialsProvider(credentialsProvider) // 使用凭证提供者
@@ -868,26 +809,21 @@ public class FetchData {
                     .build()
             ))
             .build();
-    
+
         try {
             // 上传文件
             s3Client.putObject(PutObjectRequest.builder()
                 .bucket(s3BucketName)
                 .key(s3Key)
                 .build(), Paths.get(filePath));
-            System.out.println("文件上传成功: " + s3Key);
+            logger.info("文件上传成功: " + s3Key);
         } catch (S3Exception e) {
-            System.err.println("上传文件到 S3 失败: " + e.awsErrorDetails().errorMessage());
-            System.err.println("HTTP 状态码: " + e.statusCode());
-            System.err.println("错误代码: " + e.awsErrorDetails().errorCode());
+            logger.severe("上传文件到 S3 失败: " + e.awsErrorDetails().errorMessage());
         } finally {
             s3Client.close();
         }
     }
 
-    /**
-     * 使用 AWS SNS 发送报警消息
-     */
     private static void sendSNSErrorMessage(String message) {
         // SNS Topic ARN
         String snsTopicArn = "arn:aws-cn:sns:cn-north-1:175826060701:wecom_api_connection_alert_notification";
@@ -915,9 +851,6 @@ public class FetchData {
         }
     }
 
-    /**
-     * 追加数据到 raw 文件
-     */
     private static void appendToRawFile(String content) {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(rawFilePath, true))) {
             writer.write(content);
