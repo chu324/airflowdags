@@ -504,6 +504,8 @@ public class FetchData {
         return "\"" + escapedField + "\"";
     }
 
+    private static int totalMediaFiles = 0; // 定义为类的成员变量
+
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
     
@@ -517,9 +519,9 @@ public class FetchData {
         failureDetails.clear();
     
         // 统计 media_files.csv 中的总文件数
-        int totalMediaFiles = 0;
         try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath))) {
             String line;
+            totalMediaFiles = 0; // 初始化总文件数
             while ((line = reader.readLine()) != null) {
                 totalMediaFiles++;
             }
