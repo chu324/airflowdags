@@ -506,25 +506,40 @@ public class FetchData {
 
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
-
+    
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
-
+    
         // 初始化统计变量
         totalProcessed.set(0);
         successCount.set(0);
         failureCount.set(0);
         failureDetails.clear();
-
+    
+        // 统计 media_files.csv 中的总文件数
+        int totalMediaFiles = 0;
+        try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                totalMediaFiles++;
+            }
+        } catch (IOException e) {
+            logger.severe("统计 media_files.csv 文件失败: " + e.getMessage());
+            return false;
+        }
+    
+        // 初始化进度信息
+        logger.info(String.format("[媒体文件上传进度] 总文件数=%d, 成功=0, 失败=0", totalMediaFiles));
+    
         // 创建定时任务，每分钟输出进度状态
         scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             int total = totalProcessed.get();
             int success = successCount.get();
             int failure = failureCount.get();
-            logger.info(String.format("[媒体文件上传进度] 总文件数=%d, 成功=%d, 失败=%d", total, success, failure));
+            logger.info(String.format("[媒体文件上传进度] 总文件数=%d, 成功=%d, 失败=%d", totalMediaFiles, success, failure));
         }, 0, 1, TimeUnit.MINUTES);
-
+    
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -534,43 +549,41 @@ public class FetchData {
                 .build()) {
             String[] fields;
             boolean isHeader = true;
-
+    
             // 创建线程池，并行度为 100
             ExecutorService executorService = Executors.newFixedThreadPool(100);
-
-            int totalMediaFiles = 0;
+    
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
                     isHeader = false;
                     continue;
                 }
-
+    
                 if (fields.length < 2) {
                     logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
                     continue;
                 }
-
-                totalMediaFiles++;
+    
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
-
+    
                 // 提交任务到线程池
                 executorService.submit(() -> {
                     boolean fileDownloaded = downloadAndUploadMediaFile(sdk, sdkfileid, msgtype);
                     logUploadResult(fileDownloaded, sdkfileid);
                 });
             }
-
+    
             // 关闭线程池并等待所有任务完成
             executorService.shutdown();
             executorService.awaitTermination(1, TimeUnit.HOURS); // 根据需求调整超时时间
-
+    
             // 关闭定时任务
             scheduler.shutdown();
-
+    
             logger.info(String.format("[媒体文件下载完成] 总文件数=%d, 成功=%d, 失败=%d",
                     totalMediaFiles, successCount.get(), failureCount.get()));
-
+    
             // 输出失败详情
             if (!failureDetails.isEmpty()) {
                 logger.info("失败的文件列表:");
@@ -578,15 +591,15 @@ public class FetchData {
                     logger.info("- " + failure);
                 }
             }
-
+    
             if (failureCount.get() > 0) {
                 logger.severe("部分媒体文件下载失败，请检查日志！");
                 allFilesDownloaded = false;
             }
-
+    
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
-
+    
         } catch (IOException | CsvValidationException | InterruptedException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             return false;
@@ -837,7 +850,7 @@ public class FetchData {
     private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
         // 创建凭证提供者
         DefaultCredentialsProvider credentialsProvider = DefaultCredentialsProvider.create();
-
+    
         // 构建 S3 客户端
         S3Client s3Client = S3Client.builder()
             .credentialsProvider(credentialsProvider) // 使用凭证提供者
@@ -849,15 +862,17 @@ public class FetchData {
                     .build()
             ))
             .build();
-
+    
         try {
             // 上传文件
             s3Client.putObject(PutObjectRequest.builder()
                 .bucket(s3BucketName)
                 .key(s3Key)
                 .build(), Paths.get(filePath));
+            // 成功时记录日志
             logger.info("文件上传成功: " + s3Key);
         } catch (S3Exception e) {
+            // 失败时记录日志
             logger.severe("上传文件到 S3 失败: " + e.awsErrorDetails().errorMessage());
         } finally {
             s3Client.close();
