@@ -759,9 +759,9 @@ public class FetchData {
             uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
 
-            // 删除本地 raw 和 curated 目录下的所有子文件夹
-            deleteDirectoryContents(new File(rawFilePath).getParentFile()); // 清空 raw 目录下的子文件夹
-            deleteDirectoryContents(new File(curatedFilePath).getParentFile()); // 清空 curated 目录下的子文件夹
+            // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
+            deleteDirectoryContents("/home/ec2-user/wecom_integration/data/raw"); // 清空 raw 目录下的内容
+            deleteDirectoryContents("/home/ec2-user/wecom_integration/data/curated"); // 清空 curated 目录下的内容
 
             return true;
         } catch (Exception e) {
@@ -773,25 +773,42 @@ public class FetchData {
     /**
      * 删除目录下的所有内容
      */
-    private static void deleteDirectoryContents(File directory) {
-        if (directory.exists() && directory.isDirectory()) {
+    private static void deleteDirectoryContents(String directoryPath) {
+        try {
+            // 检查目录是否存在
+            File directory = new File(directoryPath);
+            if (!directory.exists()) {
+                logger.info("目录不存在，无需清理: " + directoryPath);
+                return;
+            }
+    
+            // 删除目录下的所有文件和子目录
             File[] files = directory.listFiles();
             if (files != null) {
                 for (File file : files) {
                     if (file.isDirectory()) {
                         // 递归删除子目录
-                        deleteDirectoryContents(file);
-                        // 在删除子目录内容后，尝试删除子目录本身
-                        if (!file.delete()) {
-                            logger.severe("删除子目录失败: " + file.getAbsolutePath());
+                        deleteDirectoryContents(file.getAbsolutePath());
+                        // 删除子目录本身
+                        if (file.delete()) {
+                            logger.info("成功删除子目录: " + file.getAbsolutePath());
                         } else {
-                            logger.info("已删除子目录: " + file.getAbsolutePath());
+                            logger.severe("删除子目录失败: " + file.getAbsolutePath());
+                        }
+                    } else {
+                        // 删除文件
+                        if (file.delete()) {
+                            logger.info("成功删除文件: " + file.getAbsolutePath());
+                        } else {
+                            logger.severe("删除文件失败: " + file.getAbsolutePath());
                         }
                     }
                 }
+            } else {
+                logger.info("目录为空，无需清理: " + directoryPath);
             }
-        } else {
-            logger.severe("目录不存在或不是目录: " + directory.getAbsolutePath());
+        } catch (Exception e) {
+            logger.severe("清理目录时发生异常: " + e.getMessage());
         }
     }
 
