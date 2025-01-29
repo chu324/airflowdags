@@ -2,7 +2,7 @@ package com.tencent.wework;
 
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import software.amazon.awssdk.auth.credentials.InstanceProfileCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.core.retry.RetryPolicy;
 import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition;
 import software.amazon.awssdk.regions.Region;
@@ -839,7 +839,7 @@ public class FetchData {
      */
     private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
         S3Client s3Client = S3Client.builder()
-            .credentialsProvider(InstanceProfileCredentialsProvider.create())
+            .credentialsProvider(DefaultCredentialsProvider.builder().build())
             .region(Region.CN_NORTH_1)
             .overrideConfiguration(config -> config.retryPolicy(
                 RetryPolicy.builder()
@@ -870,7 +870,7 @@ public class FetchData {
 
         // 创建 SNS 客户端
         SnsClient snsClient = SnsClient.builder()
-            .credentialsProvider(InstanceProfileCredentialsProvider.create()) // 使用 IAM Role
+            .credentialsProvider(DefaultCredentialsProvider.builder().build()) // 使用 IAM Role
             .region(Region.CN_NORTH_1) // 设置区域
             .build();
 
