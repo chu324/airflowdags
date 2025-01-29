@@ -775,10 +775,6 @@ public class FetchData {
             uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
             logger.info("raw 文件上传完成: " + rawS3Key);
 
-            // 删除本地 raw 文件
-            deleteLocalFile(rawFilePath);
-            deleteLocalFile(rawZipFilePath);
-
             // 压缩并上传 curated 文件
             String curatedZipFilePath = compressFile(curatedFilePath, "chat_" + taskDateStr + ".zip");
             String curatedS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/chat_" + taskDateStr + ".zip";
@@ -786,14 +782,37 @@ public class FetchData {
             uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
 
-            // 删除本地 curated 文件
-            deleteLocalFile(curatedFilePath);
-            deleteLocalFile(curatedZipFilePath);
+            // 删除本地 raw 和 curated 目录下的所有内容
+            deleteDirectoryContents(new File(rawFilePath).getParentFile());
+            deleteDirectoryContents(new File(curatedFilePath).getParentFile());
 
             return true;
         } catch (Exception e) {
             logger.severe("压缩并上传文件到 S3 失败: " + e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * 删除目录下的所有内容
+     */
+    private static void deleteDirectoryContents(File directory) {
+        if (directory.exists() && directory.isDirectory()) {
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isDirectory()) {
+                        deleteDirectoryContents(file); // 递归删除子目录
+                    }
+                    if (!file.delete()) {
+                        logger.severe("删除文件失败: " + file.getAbsolutePath());
+                    } else {
+                        logger.info("已删除文件: " + file.getAbsolutePath());
+                    }
+                }
+            }
+        } else {
+            logger.severe("目录不存在或不是目录: " + directory.getAbsolutePath());
         }
     }
 
