@@ -651,14 +651,14 @@ public class FetchData {
                                 continue;
                             } else {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 当前重试超过最大重试时间.");
-                                sendSNSErrorMessage("GetMediaData 持续失败，ret=" + ret + "，当前重试超过最大重试时间。");
+                                sendSNSErrorMessage("媒体文件下载失败，sdkfileid=" + sdkfileid + "，超过最大重试时间。");
                                 failureCount.incrementAndGet();
                                 failureDetails.add("sdkfileid=" + sdkfileid);
                                 return false;
                             }
                         } else {
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
-                            sendSNSErrorMessage("GetMediaData 失败，ret=" + ret + "，任务中断。");
+                            sendSNSErrorMessage("媒体文件下载失败，sdkfileid=" + sdkfileid + "，错误码：" + ret);
                             failureCount.incrementAndGet();
                             failureDetails.add("sdkfileid=" + sdkfileid);
                             return false;
@@ -722,7 +722,7 @@ public class FetchData {
                 }
             }
         }
-    }
+}
 
     /**
      * 从文件名中提取文件扩展名
