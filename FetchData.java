@@ -622,16 +622,16 @@ public class FetchData {
             logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
             return false;
         }
-
+    
         String indexbuf = ""; // 首次调用时不需要填写
         boolean isFinished = false;
-
+    
         // 重试机制相关变量
         final long RETRY_INTERVAL = 10 * 1000; // 重试间隔：10秒
         final long MAX_RETRY_TIME = 30 * 60 * 1000; // 最大重试时间：30分钟
         long retryStartTime = System.currentTimeMillis(); // 重试开始时间
         boolean isInRetryPeriod = false; // 是否处于重试状态
-
+    
         // 创建临时文件
         File tempFile = null;
         try {
@@ -639,8 +639,10 @@ public class FetchData {
             try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
+                    logger.info("调用 NewMediaData, mediaData: " + mediaData);
+    
                     int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
-
+    
                     if (ret != 0) {
                         if (ret == 10001) {
                             // 如果当前不处于重试状态，则开始记录重试时间
@@ -649,49 +651,60 @@ public class FetchData {
                                 retryStartTime = System.currentTimeMillis(); // 记录重试开始时间
                                 logger.info("检测到 ret 10001，开始记录重试时间，retryStartTime: " + retryStartTime);
                             }
-
+    
                             // 计算当前重试已用时间
                             long currentTime = System.currentTimeMillis();
                             long elapsedTime = currentTime - retryStartTime;
                             logger.info("重试中... 当前重试已用时间: " + elapsedTime + "ms, 最大重试时间: " + MAX_RETRY_TIME + "ms");
-
+    
                             if (elapsedTime < MAX_RETRY_TIME) {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 重试中...");
                                 Thread.sleep(RETRY_INTERVAL);
                                 continue;
                             } else {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 当前重试超过最大重试时间.");
+                                Finance.FreeMediaData(mediaData);
+                                logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                                 return false;
                             }
+                        } else if (ret == 10010) {
+                            // 数据已过期
+                            logger.warning("媒体数据已过期，跳过下载: sdkfileid=" + sdkfileid + ", msgtype=" + msgtype);
+                            Finance.FreeMediaData(mediaData);
+                            logger.info("调用 FreeMediaData, mediaData: " + mediaData);
+                            return false;
                         } else {
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
+                            Finance.FreeMediaData(mediaData);
+                            logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                             return false;
                         }
                     }
-
+    
                     // 如果成功拉取数据，则标记重试结束
                     if (isInRetryPeriod) {
                         isInRetryPeriod = false; // 退出重试状态
                         retryStartTime = 0; // 重置重试开始时间
                         logger.info("成功拉取数据，当前重试结束。");
                     }
-
+    
                     // 将本次拉取的数据写入临时文件
                     fileOutputStream.write(Finance.GetData(mediaData));
-
+    
                     // 检查是否拉取完成
                     isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
-
+    
                     // 更新索引
                     if (!isFinished) {
                         indexbuf = Finance.GetOutIndexBuf(mediaData);
                     }
-
+    
                     // 释放资源
                     Finance.FreeMediaData(mediaData);
+                    logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                 }
             }
-
+    
             // 生成 S3 文件路径
             String s3Key;
             if ("unknown".equals(msgtype)) {
@@ -701,11 +714,11 @@ public class FetchData {
                 s3Key = String.format("raw/wecom_chat/media/%s/%s.%s",
                         msgtype, sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
             }
-
+    
             // 上传临时文件到 S3
             uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
             return true;
-
+    
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.severe("线程被中断: " + e.getMessage());
