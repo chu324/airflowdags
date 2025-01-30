@@ -871,8 +871,6 @@ public class FetchData {
                 .bucket(s3BucketName)
                 .key(s3Key)
                 .build(), Paths.get(filePath));
-            // 成功时记录日志
-            logger.info("文件上传成功: " + s3Key);
         } catch (S3Exception e) {
             // 失败时记录日志
             logger.severe("上传文件到 S3 失败: " + e.awsErrorDetails().errorMessage());
