@@ -578,10 +578,16 @@ public class FetchData {
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
-                // 提交任务到线程池
+                // 为每个任务创建独立的 SDK 实例
                 executorService.submit(() -> {
-                    boolean fileDownloaded = downloadAndUploadMediaFile(sdk, sdkfileid, msgtype);
-                    logUploadResult(fileDownloaded, sdkfileid);
+                    long taskSdk = Finance.NewSdk(); // 创建新的 SDK 实例
+                    Finance.Init(taskSdk, corpid, secret); // 初始化 SDK
+                    try {
+                        boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
+                        logUploadResult(fileDownloaded, sdkfileid);
+                    } finally {
+                        Finance.DestroySdk(taskSdk); // 销毁 SDK 实例
+                    }
                 });
             }
     
@@ -666,11 +672,6 @@ public class FetchData {
                                 Finance.FreeMediaData(mediaData);
                                 return false;
                             }
-                        } else if (ret == 10010) {
-                            // 数据已过期
-                            logger.warning("媒体数据已过期，跳过下载: sdkfileid=" + sdkfileid + ", msgtype=" + msgtype);
-                            Finance.FreeMediaData(mediaData);
-                            return false;
                         } else {
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
                             Finance.FreeMediaData(mediaData);
@@ -693,7 +694,8 @@ public class FetchData {
     
                     // 更新索引
                     if (!isFinished) {
-                        indexbuf = Finance.GetOutIndexBuf(mediaData);
+                        indexbuf = Finance.GetOutIndexBuf(mediaData); // 更新 indexbuf
+                        logger.info("更新 indexbuf: " + indexbuf);
                     }
     
                     // 释放资源
