@@ -664,19 +664,16 @@ public class FetchData {
                             } else {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 当前重试超过最大重试时间.");
                                 Finance.FreeMediaData(mediaData);
-                                logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                                 return false;
                             }
                         } else if (ret == 10010) {
                             // 数据已过期
                             logger.warning("媒体数据已过期，跳过下载: sdkfileid=" + sdkfileid + ", msgtype=" + msgtype);
                             Finance.FreeMediaData(mediaData);
-                            logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                             return false;
                         } else {
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
                             Finance.FreeMediaData(mediaData);
-                            logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                             return false;
                         }
                     }
@@ -701,7 +698,6 @@ public class FetchData {
     
                     // 释放资源
                     Finance.FreeMediaData(mediaData);
-                    logger.info("调用 FreeMediaData, mediaData: " + mediaData);
                 }
             }
     
