@@ -1,5 +1,11 @@
-// 日志聚合器类
-public static class LogAggregator {
+package com.tencent.wework;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class LogAggregator {
     private final AtomicInteger totalMediaFiles = new AtomicInteger(0);
     private final AtomicInteger successCount = new AtomicInteger(0);
     private final AtomicInteger failureCount = new AtomicInteger(0);
@@ -27,12 +33,12 @@ public static class LogAggregator {
     }
 
     public void logStatistics() {
-        logger.info(String.format("[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d",
+        System.out.println(String.format("[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d",
                 totalMediaFiles.get(), successCount.get(), failureCount.get(), expiredCount.get()));
         if (!failureDetails.isEmpty()) {
-            logger.info("失败的文件列表:");
+            System.out.println("失败的文件列表:");
             for (String detail : failureDetails) {
-                logger.info("- " + detail);
+                System.out.println("- " + detail);
             }
         }
     }
