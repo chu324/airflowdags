@@ -1,64 +1,64 @@
 package com.tencent.wework;
 
-import org.quartz.*;
-import org.quartz.impl.StdSchedulerFactory;
-import java.util.logging.Logger;
-import java.util.logging.FileHandler;
-import java.util.logging.SimpleFormatter;
-import java.io.IOException;
-import java.time.ZonedDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.HashMap;
+import java.util.Map;
 
-public class SchedulerSetup {
-    private static final Logger logger = Logger.getLogger(SchedulerSetup.class.getName());
+public class LogAggregator {
+    private final AtomicInteger totalMediaFiles = new AtomicInteger(0);
+    private final AtomicInteger successCount = new AtomicInteger(0);
+    private final AtomicInteger failureCount = new AtomicInteger(0);
+    private final AtomicInteger expiredCount = new AtomicInteger(0);
 
-    static {
-        try {
-            // 配置日志记录
-            String logDir = "logs/"; // 修改为相对路径
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-            ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
-            String dateStr = now.format(formatter);
-            String logPath = logDir + dateStr + "/scheduler.log";
+    // 分类统计失败情况
+    private final Map<String, AtomicInteger> failureCategories = new HashMap<>();
+    private final Map<String, List<String>> failureSdkFileIds = new HashMap<>();
 
-            // 确保目录存在
-            java.io.File logDirFile = new java.io.File(logDir);
-            if (!logDirFile.exists()) {
-                logDirFile.mkdirs(); // 创建目录
-            }
-
-            FileHandler fileHandler = new FileHandler(logPath, true);
-            fileHandler.setFormatter(new SimpleFormatter());
-            Logger.getLogger("com.tencent.wework").addHandler(fileHandler);
-        } catch (IOException e) {
-            System.err.println("配置日志记录失败: " + e.getMessage());
-        }
+    public void incrementTotalMediaFiles() {
+        totalMediaFiles.incrementAndGet();
     }
 
-    public static void main(String[] args) throws SchedulerException, InterruptedException {
-        // 创建调度器
-        Scheduler scheduler = StdSchedulerFactory.getDefaultScheduler();
+    public void incrementSuccessCount() {
+        successCount.incrementAndGet();
+    }
 
-        // 定义任务
-        JobDetail job = JobBuilder.newJob(FetchDataJob.class)
-                .withIdentity("fetchDataJob", "group1")
-                .build();
+    public void incrementFailureCount() {
+        failureCount.incrementAndGet();
+    }
 
-        // 定义触发器（北京时间2025年1月17日上午11点执行）
-        Trigger trigger = TriggerBuilder.newTrigger()
-                .withIdentity("fetchDataTrigger", "group1")
-                .withSchedule(CronScheduleBuilder.cronSchedule("0 02 23 * * ?")) // 2025年1月17日上午11点执行
-                .build();
+    public void incrementExpiredCount() {
+        expiredCount.incrementAndGet();
+    }
 
-        // 绑定任务和触发器
-        scheduler.scheduleJob(job, trigger);
+    public void logFailureCategory(String category, String sdkfileid) {
+        System.out.println("记录失败分类: " + category + ", sdkfileid: " + sdkfileid);
+        failureCategories.computeIfAbsent(category, k -> new AtomicInteger(0)).incrementAndGet();
+        failureSdkFileIds.computeIfAbsent(category, k -> new ArrayList<>()).add(sdkfileid);
+    }
 
-        // 启动调度器
-        scheduler.start();
-        logger.info("调度器已启动");
+    public void logStatistics() {
+        System.out.println("定时任务触发，正在输出统计信息...");
+        System.out.println(String.format("[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d",
+                totalMediaFiles.get(), successCount.get(), failureCount.get(), expiredCount.get()));
 
-        // 让主线程保持运行
-        Thread.sleep(Long.MAX_VALUE);
+        if (!failureCategories.isEmpty()) {
+            System.out.println("失败分类统计:");
+            for (Map.Entry<String, AtomicInteger> entry : failureCategories.entrySet()) {
+                System.out.println("- " + entry.getKey() + ": " + entry.getValue().get());
+            }
+        }
+
+        if (!failureSdkFileIds.isEmpty()) {
+            System.out.println("失败的文件列表按类型分类:");
+            for (Map.Entry<String, List<String>> entry : failureSdkFileIds.entrySet()) {
+                System.out.println("类型: " + entry.getKey());
+                for (String sdkfileid : entry.getValue()) {
+                    System.out.println("  - " + sdkfileid);
+                }
+            }
+        }
     }
 }
