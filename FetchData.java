@@ -581,7 +581,7 @@ public class FetchData {
                 // 为每个任务创建独立的 SDK 实例
                 executorService.submit(() -> {
                     long taskSdk = Finance.NewSdk(); // 创建新的 SDK 实例
-                    Finance.Init(taskSdk, corpid, secret); // 初始化 SDK
+                    Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs"); // 初始化 SDK
                     try {
                         boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
                         logUploadResult(fileDownloaded, sdkfileid);
