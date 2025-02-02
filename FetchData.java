@@ -490,19 +490,19 @@ public class FetchData {
 
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
-
+    
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
-
+    
         // 初始化日志聚合器
         LogAggregator logAggregator = new LogAggregator();
-
+    
         // 定时任务，每10分钟输出一次统计信息
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             logAggregator.logStatistics();
         }, 0, 10, TimeUnit.MINUTES);
-
+    
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -512,27 +512,27 @@ public class FetchData {
                 .build()) {
             String[] fields;
             boolean isHeader = true;
-
+    
             // 创建线程池，并行度为 100
             ExecutorService executorService = Executors.newFixedThreadPool(100);
-
+    
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
                     isHeader = false;
                     continue;
                 }
-
+    
                 if (fields.length < 2) {
                     logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
                     continue;
                 }
-
+    
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
-
+    
                 // 更新总文件数统计
                 logAggregator.incrementTotalMediaFiles();
-
+    
                 // 为每个任务创建独立的 SDK 实例
                 executorService.submit(() -> {
                     long taskSdk = Finance.NewSdk();
@@ -543,30 +543,30 @@ public class FetchData {
                             logAggregator.incrementSuccessCount();
                         } else {
                             logAggregator.incrementFailureCount();
-                            logAggregator.addFailureDetail("文件下载失败: " + sdkfileid);
+                            logAggregator.logFailureCategory("下载失败", sdkfileid);
                         }
                     } catch (Exception e) {
                         logAggregator.incrementFailureCount();
-                        logAggregator.addFailureDetail("文件下载异常: " + sdkfileid + " - " + e.getMessage());
+                        logAggregator.logFailureCategory("异常", sdkfileid);
                     } finally {
                         Finance.DestroySdk(taskSdk);
                     }
                 });
             }
-
+    
             // 关闭线程池并等待所有任务完成
             executorService.shutdown();
             executorService.awaitTermination(1, TimeUnit.HOURS); // 根据需求调整超时时间
-
+    
             // 关闭定时任务
             scheduler.shutdown();
-
+    
             // 最终统计信息
             logAggregator.logStatistics();
-
+    
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
-
+    
         } catch (IOException | CsvValidationException | InterruptedException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             return false;
