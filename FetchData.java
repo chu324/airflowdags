@@ -23,6 +23,8 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.zip.ZipEntry; 
+import java.util.zip.ZipOutputStream; 
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.Logger;
@@ -630,7 +632,7 @@ public class FetchData {
 
                     if (isInRetryPeriod) {
                         isInRetryPeriod = false;
-                        retry StartTime = 0;
+                        retryStartTime = 0;
                         logger.info("成功拉取数据，当前重试结束。");
                     }
 
@@ -706,6 +708,97 @@ public class FetchData {
             default:
                 return sdkfileid + ".bin";
         }
+    }
+
+    private static boolean compressAndUploadFilesToS3() {
+        try {
+            // 压缩并上传 raw 文件
+            String rawZipFilePath = compressFile(rawFilePath, "wecom_chat_" + taskDateStr + "_raw.zip");
+            String rawS3Key = "home/wecom/inbound/c360/chat/archival/" + taskDateStr + "/wecom_chat_" + taskDateStr + "_raw.zip";
+            logger.info("开始上传 raw 文件到 S3: " + rawS3Key);
+            uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
+            logger.info("raw 文件上传完成: " + rawS3Key);
+
+            // 压缩并上传 curated 文件
+            String curatedZipFilePath = compressFile(curatedFilePath, "chat_" + taskDateStr + ".zip");
+            String curatedS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/chat_" + taskDateStr + ".zip";
+            logger.info("开始上传 curated 文件到 S3: " + curatedS3Key);
+            uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
+            logger.info("curated 文件上传完成: " + curatedS3Key);
+
+            // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
+            deleteDirectoryContents("/home/ec2-user/wecom_integration/data/raw"); // 清空 raw 目录下的内容
+            deleteDirectoryContents("/home/ec2-user/wecom_integration/data/curated"); // 清空 curated 目录下的内容
+
+            return true;
+        } catch (Exception e) {
+            logger.severe("压缩并上传文件到 S3 失败: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 删除目录下的所有内容
+     */
+    private static void deleteDirectoryContents(String directoryPath) {
+        try {
+            // 检查目录是否存在
+            File directory = new File(directoryPath);
+            if (!directory.exists()) {
+                logger.info("目录不存在，无需清理: " + directoryPath);
+                return;
+            }
+    
+            // 删除目录下的所有文件和子目录
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isDirectory()) {
+                        // 递归删除子目录
+                        deleteDirectoryContents(file.getAbsolutePath());
+                        // 删除子目录本身
+                        if (file.delete()) {
+                            logger.info("成功删除子目录: " + file.getAbsolutePath());
+                        } else {
+                            logger.severe("删除子目录失败: " + file.getAbsolutePath());
+                        }
+                    } else {
+                        // 删除文件
+                        if (file.delete()) {
+                            logger.info("成功删除文件: " + file.getAbsolutePath());
+                        } else {
+                            logger.severe("删除文件失败: " + file.getAbsolutePath());
+                        }
+                    }
+                }
+            } else {
+                logger.info("目录为空，无需清理: " + directoryPath);
+            }
+        } catch (Exception e) {
+            logger.severe("清理目录时发生异常: " + e.getMessage());
+        }
+    }
+
+    private static String compressFile(String filePath, String zipFileName) throws IOException {
+        File file = new File(filePath);
+        String zipFilePath = file.getParent() + "/" + zipFileName;
+
+        try (FileOutputStream fos = new FileOutputStream(zipFilePath);
+             ZipOutputStream zipOut = new ZipOutputStream(fos);
+             FileInputStream fis = new FileInputStream(file)) {
+
+            ZipEntry zipEntry = new ZipEntry(file.getName());
+            zipOut.putNextEntry(zipEntry);
+
+            byte[] bytes = new byte[1024];
+            int length;
+            while ((length = fis.read(bytes)) >= 0) {
+                zipOut.write(bytes, 0, length);
+            }
+        }
+
+        logger.info("文件已压缩为 ZIP: " + zipFilePath);
+        return zipFilePath;
     }
 
     private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
