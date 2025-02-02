@@ -521,35 +521,14 @@ public class FetchData {
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
     
-        // 初始化统计变量
-        totalProcessed.set(0);
-        successCount.set(0);
-        failureCount.set(0);
-        failureDetails.clear();
+        // 初始化日志聚合器
+        LogAggregator logAggregator = new LogAggregator();
     
-        // 统计 media_files.csv 中的总文件数
-        try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath))) {
-            String line;
-            totalMediaFiles = 0; // 初始化总文件数
-            while ((line = reader.readLine()) != null) {
-                totalMediaFiles++;
-            }
-        } catch (IOException e) {
-            logger.severe("统计 media_files.csv 文件失败: " + e.getMessage());
-            return false;
-        }
-    
-        // 初始化进度信息
-        logger.info(String.format("[媒体文件上传进度] 总文件数=%d, 成功=0, 失败=0", totalMediaFiles));
-    
-        // 创建定时任务，每分钟输出进度状态
-        scheduler = Executors.newScheduledThreadPool(1);
+        // 定时任务，每10分钟输出一次统计信息
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
-            int total = totalProcessed.get();
-            int success = successCount.get();
-            int failure = failureCount.get();
-            logger.info(String.format("[媒体文件上传进度] 总文件数=%d, 成功=%d, 失败=%d", totalMediaFiles, success, failure));
-        }, 0, 1, TimeUnit.MINUTES);
+            logAggregator.logStatistics();
+        }, 0, 10, TimeUnit.MINUTES);
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
@@ -578,15 +557,26 @@ public class FetchData {
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
+                // 更新总文件数统计
+                logAggregator.incrementTotalMediaFiles();
+    
                 // 为每个任务创建独立的 SDK 实例
                 executorService.submit(() -> {
-                    long taskSdk = Finance.NewSdk(); // 创建新的 SDK 实例
-                    Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs"); // 初始化 SDK
+                    long taskSdk = Finance.NewSdk();
+                    Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
                     try {
                         boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
-                        logUploadResult(fileDownloaded, sdkfileid);
+                        if (fileDownloaded) {
+                            logAggregator.incrementSuccessCount();
+                        } else {
+                            logAggregator.incrementFailureCount();
+                            logAggregator.addFailureDetail("文件下载失败: " + sdkfileid);
+                        }
+                    } catch (Exception e) {
+                        logAggregator.incrementFailureCount();
+                        logAggregator.addFailureDetail("文件下载异常: " + sdkfileid + " - " + e.getMessage());
                     } finally {
-                        Finance.DestroySdk(taskSdk); // 销毁 SDK 实例
+                        Finance.DestroySdk(taskSdk);
                     }
                 });
             }
@@ -598,21 +588,8 @@ public class FetchData {
             // 关闭定时任务
             scheduler.shutdown();
     
-            logger.info(String.format("[媒体文件下载完成] 总文件数=%d, 成功=%d, 失败=%d",
-                    totalMediaFiles, successCount.get(), failureCount.get()));
-    
-            // 输出失败详情
-            if (!failureDetails.isEmpty()) {
-                logger.info("失败的文件列表:");
-                for (String failure : failureDetails) {
-                    logger.info("- " + failure);
-                }
-            }
-    
-            if (failureCount.get() > 0) {
-                logger.severe("部分媒体文件下载失败，请检查日志！");
-                allFilesDownloaded = false;
-            }
+            // 最终统计信息
+            logAggregator.logStatistics();
     
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
@@ -650,15 +627,16 @@ public class FetchData {
                     int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
     
                     if (ret != 0) {
-                        if (ret == 10001) {
-                            // 如果当前不处于重试状态，则开始记录重试时间
+                        if (ret == 10010) {
+                            logger.info("GetMediaData failed, ret: " + ret + ". 数据已过期，跳过当前文件: " + sdkfileid);
+                            return false; // 跳过当前文件
+                        } else if (ret == 10001) {
                             if (!isInRetryPeriod) {
-                                isInRetryPeriod = true; // 进入重试状态
-                                retryStartTime = System.currentTimeMillis(); // 记录重试开始时间
+                                isInRetryPeriod = true;
+                                retryStartTime = System.currentTimeMillis();
                                 logger.info("检测到 ret 10001，开始记录重试时间，retryStartTime: " + retryStartTime);
                             }
     
-                            // 计算当前重试已用时间
                             long currentTime = System.currentTimeMillis();
                             long elapsedTime = currentTime - retryStartTime;
                             logger.info("重试中... 当前重试已用时间: " + elapsedTime + "ms, 最大重试时间: " + MAX_RETRY_TIME + "ms");
@@ -679,26 +657,18 @@ public class FetchData {
                         }
                     }
     
-                    // 如果成功拉取数据，则标记重试结束
                     if (isInRetryPeriod) {
-                        isInRetryPeriod = false; // 退出重试状态
-                        retryStartTime = 0; // 重置重试开始时间
+                        isInRetryPeriod = false;
+                        retryStartTime = 0;
                         logger.info("成功拉取数据，当前重试结束。");
                     }
     
-                    // 将本次拉取的数据写入临时文件
                     fileOutputStream.write(Finance.GetData(mediaData));
-    
-                    // 检查是否拉取完成
                     isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
-    
-                    // 更新索引
                     if (!isFinished) {
-                        indexbuf = Finance.GetOutIndexBuf(mediaData); // 更新 indexbuf
+                        indexbuf = Finance.GetOutIndexBuf(mediaData);
                         logger.info("更新 indexbuf: " + indexbuf);
                     }
-    
-                    // 释放资源
                     Finance.FreeMediaData(mediaData);
                 }
             }
@@ -725,7 +695,6 @@ public class FetchData {
             logger.severe("下载或上传媒体文件失败: " + e.getMessage());
             return false;
         } finally {
-            // 删除临时文件
             if (tempFile != null && tempFile.exists()) {
                 if (!tempFile.delete()) {
                     logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
