@@ -112,7 +112,6 @@ public class FetchData {
             long slice = Finance.NewSlice();
             long batchStartTime = System.currentTimeMillis(); // 记录批次开始时间
             try {
-                logger.info("开始调用 GetChatData, lastSeq = " + lastSeq);
                 long ret = Finance.GetChatData(sdk, lastSeq, limit, "", "", 10, slice);
     
                 if (ret != 0) {
@@ -214,7 +213,6 @@ public class FetchData {
             } finally {
                 if (slice != 0) {
                     Finance.FreeSlice(slice);
-                    logger.info("[资源释放] slice 释放成功");
                 }
             }
         }
