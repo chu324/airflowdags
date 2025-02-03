@@ -710,18 +710,27 @@ public class FetchData {
             logger.info("开始上传 raw 文件到 S3: " + rawS3Key);
             uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
             logger.info("raw 文件上传完成: " + rawS3Key);
-
+    
             // 压缩并上传 curated 文件
             String curatedZipFilePath = compressFile(curatedFilePath, "chat_" + taskDateStr + ".zip");
             String curatedS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/chat_" + taskDateStr + ".zip";
             logger.info("开始上传 curated 文件到 S3: " + curatedS3Key);
             uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
-
+    
+            // 上传 failed_records 文件到 S3
+            String failedRecordsFilePath = curatedFilePath.replace("chat_", "failed_records_");
+            if (new File(failedRecordsFilePath).exists()) {
+                String failedRecordsS3Key = "rejected/wecom_chat/" + taskDateStr + "/failed_records_" + taskDateStr + ".csv";
+                logger.info("开始上传 failed_records 文件到 S3: " + failedRecordsS3Key);
+                uploadFileToS3(failedRecordsFilePath, "175826060701-eds-qa-cn-north-1", failedRecordsS3Key);
+                logger.info("failed_records 文件上传完成: " + failedRecordsS3Key);
+            }
+    
             // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
             deleteDirectoryContents("/home/ec2-user/wecom_integration/data/raw"); // 清空 raw 目录下的内容
             deleteDirectoryContents("/home/ec2-user/wecom_integration/data/curated"); // 清空 curated 目录下的内容
-
+    
             return true;
         } catch (Exception e) {
             logger.severe("压缩并上传文件到 S3 失败: " + e.getMessage());
