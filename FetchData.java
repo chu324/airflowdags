@@ -126,7 +126,7 @@ public class FetchData {
                         }
                         long elapsedTime = System.currentTimeMillis() - retryStartTime;
                         if (elapsedTime < MAX_RETRY_TIME) {
-                            Thread.sleep(RETRY_INTERVAL);
+                            Thread.sleep(RETRY_INTERVAL); // 可能抛出 InterruptedException
                             continue;
                         } else {
                             logger.severe("GetChatData failed, ret: " + ret + ". 当前波动超过最大重试时间.");
@@ -191,8 +191,11 @@ public class FetchData {
                     logger.info("所有数据已拉取完成！");
                 }
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                Thread.currentThread().interrupt(); // 恢复中断状态
                 logger.severe("线程被中断: " + e.getMessage());
+                return false;
+            } catch (IOException e) {
+                logger.severe("解析 JSON 失败: " + e.getMessage());
                 return false;
             } catch (Exception e) {
                 logger.severe("拉取数据失败: " + e.getMessage());
