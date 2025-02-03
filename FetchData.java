@@ -525,7 +525,7 @@ public class FetchData {
                     long taskSdk = Finance.NewSdk();
                     Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
                     try {
-                        boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
+                        boolean fileDownloaded = (taskSdk, sdkfileid, msgtype);
                         if (fileDownloaded) {
                             logAggregator.incrementSuccessCount(); // 使用类级别的 logAggregator
                         } else {
