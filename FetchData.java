@@ -501,7 +501,7 @@ public class FetchData {
             boolean isHeader = true;
     
             // 创建线程池，并行度为 100
-            ExecutorService executorService = Executors.newFixedThreadPool(100);
+            ExecutorService executorService = Executors.newFixedThreadPool(20);
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -543,7 +543,14 @@ public class FetchData {
     
             // 关闭线程池并等待所有任务完成
             executorService.shutdown();
-            executorService.awaitTermination(1, TimeUnit.HOURS); // 根据需求调整超时时间
+            // 关闭线程池并等待所有任务完成
+            executorService.shutdown();
+            try {
+                executorService.awaitTermination(1, TimeUnit.HOURS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.severe("线程池关闭中断: " + e.getMessage());
+            }
     
             // 关闭定时任务
             scheduler.shutdown();
@@ -578,6 +585,7 @@ public class FetchData {
         try {
             tempFile = File.createTempFile("media_", ".tmp");
             try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
+                long retryCount = 0;
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
     
@@ -585,8 +593,11 @@ public class FetchData {
     
                     if (ret != 0) {
                         if (ret == 10010) {
-                            return false; // 跳过当前文件
+                            logger.warning("SDK 返回 10010，跳过当前文件: sdkfileid=" + sdkfileid);
+                            Finance.FreeMediaData(mediaData);
+                            return false;
                         } else if (ret == 10001) {
+                            retryCount++;
                             if (!isInRetryPeriod) {
                                 isInRetryPeriod = true;
                                 retryStartTime = System.currentTimeMillis();
@@ -596,21 +607,22 @@ public class FetchData {
                             long elapsedTime = currentTime - retryStartTime;
     
                             if (elapsedTime < MAX_RETRY_TIME) {
+                                logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
                                 Thread.sleep(RETRY_INTERVAL);
                                 continue;
                             } else {
                                 logger.severe("GetMediaData failed, ret: " + ret + ". 当前重试超过最大重试时间.");
                                 Finance.FreeMediaData(mediaData);
                                 logAggregator.logFailureCategory("下载超时", sdkfileid);
-                                saveFailedRecordsToCSV("下载超时", sdkfileid, ret); // 记录下载超时
+                                saveFailedRecordsToCSV("下载超时", sdkfileid, ret);
                                 return false;
                             }
                         } else {
-                            logAggregator.logApiErrorCode(ret);
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
+                            logAggregator.logApiErrorCode(ret);
                             Finance.FreeMediaData(mediaData);
                             logAggregator.logFailureCategory("API 错误（非 10001）", sdkfileid);
-                            saveFailedRecordsToCSV("API 错误（非 10001）", sdkfileid, ret); // 记录 API 错误
+                            saveFailedRecordsToCSV("API 错误（非 10001）", sdkfileid, ret);
                             return false;
                         }
                     }
@@ -647,17 +659,17 @@ public class FetchData {
             Thread.currentThread().interrupt();
             logger.severe("线程被中断: " + e.getMessage());
             logAggregator.logFailureCategory("线程中断", sdkfileid);
-            saveFailedRecordsToCSV("线程中断", sdkfileid, -1); // 记录线程中断
+            saveFailedRecordsToCSV("线程中断", sdkfileid, -1);
             return false;
         } catch (IOException e) {
             logger.severe("文件操作失败: " + e.getMessage());
             logAggregator.logFailureCategory("文件操作失败", sdkfileid);
-            saveFailedRecordsToCSV("文件操作失败", sdkfileid, -1); // 记录文件操作失败
+            saveFailedRecordsToCSV("文件操作失败", sdkfileid, -1);
             return false;
         } catch (Exception e) {
             logger.severe("未知异常: " + e.getMessage());
             logAggregator.logFailureCategory("未知异常", sdkfileid);
-            saveFailedRecordsToCSV("未知异常", sdkfileid, -1); // 记录未知异常
+            saveFailedRecordsToCSV("未知异常", sdkfileid, -1);
             return false;
         } finally {
             if (tempFile != null && tempFile.exists()) {
@@ -687,18 +699,30 @@ public class FetchData {
             case "emotion":
                 return sdkfileid + ".jpg";
             case "file":
-                // 解析解密的 JSON 文件提取 filename 和 fileext
                 try {
-                    JsonNode fileNode = objectMapper.readTree(sdkfileid);
-                    String filename = fileNode.path("filename").asText();
-                    String fileext = fileNode.path("fileext").asText();
-                    return filename + "." + fileext;
+                    if (isJson(sdkfileid)) {
+                        JsonNode fileNode = objectMapper.readTree(sdkfileid);
+                        String filename = fileNode.path("filename").asText();
+                        String fileext = fileNode.path("fileext").asText();
+                        return filename + "." + fileext;
+                    }
+                    return sdkfileid + ".bin";
                 } catch (Exception e) {
                     logger.severe("解析文件信息失败: " + e.getMessage());
                     return sdkfileid + ".bin";
                 }
             default:
                 return sdkfileid + ".bin";
+        }
+    }
+    
+    // 判断字符串是否为有效的 JSON
+    private static boolean isJson(String content) {
+        try {
+            objectMapper.readTree(content);
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -865,6 +889,7 @@ public class FetchData {
             // 格式：错误类型（ret代码）,sdkfileid
             writer.write(errorType + " (" + retCode + ")," + sdkfileid);
             writer.newLine();
+            logAggregator.incrementFailedRecordsCount();
         } catch (IOException e) {
             logger.severe("记录失败文件信息失败: " + e.getMessage());
         }
