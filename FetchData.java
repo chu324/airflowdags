@@ -48,6 +48,9 @@ public class FetchData {
     // 定时任务
     private static ScheduledExecutorService scheduler;
 
+    // 声明 logAggregator 为静态变量
+    private static final LogAggregator logAggregator = new LogAggregator();
+
     public static boolean fetchNewData(long sdk) {
         // 设置任务日期
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -479,7 +482,7 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
     
         // 初始化日志聚合器
-        LogAggregator logAggregator = new LogAggregator();
+        LogAggregator logAggregator = new LogAggregator(); // 移除这一行，因为它已经在类级别声明了
     
         // 定时任务，每10分钟输出一次统计信息
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
@@ -515,7 +518,7 @@ public class FetchData {
                 String sdkfileid = fields[1];
     
                 // 更新总文件数统计
-                logAggregator.incrementTotalMediaFiles();
+                logAggregator.incrementTotalMediaFiles(); // 使用类级别的 logAggregator
     
                 // 为每个任务创建独立的 SDK 实例
                 executorService.submit(() -> {
@@ -524,14 +527,14 @@ public class FetchData {
                     try {
                         boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
                         if (fileDownloaded) {
-                            logAggregator.incrementSuccessCount();
+                            logAggregator.incrementSuccessCount(); // 使用类级别的 logAggregator
                         } else {
-                            logAggregator.incrementFailureCount();
-                            logAggregator.logFailureCategory("下载失败", sdkfileid);
+                            logAggregator.incrementFailureCount(); // 使用类级别的 logAggregator
+                            logAggregator.logFailureCategory("下载失败", sdkfileid); // 使用类级别的 logAggregator
                         }
                     } catch (Exception e) {
-                        logAggregator.incrementFailureCount();
-                        logAggregator.logFailureCategory("异常", sdkfileid);
+                        logAggregator.incrementFailureCount(); // 使用类级别的 logAggregator
+                        logAggregator.logFailureCategory("异常", sdkfileid); // 使用类级别的 logAggregator
                     } finally {
                         Finance.DestroySdk(taskSdk);
                     }
@@ -546,7 +549,7 @@ public class FetchData {
             scheduler.shutdown();
     
             // 最终统计信息
-            logAggregator.logStatistics();
+            logAggregator.logStatistics(); // 使用类级别的 logAggregator
     
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
