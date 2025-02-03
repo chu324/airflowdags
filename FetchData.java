@@ -127,10 +127,8 @@ public class FetchData {
                         // 计算当前波动已重试时间
                         long currentTime = System.currentTimeMillis();
                         long elapsedTime = currentTime - retryStartTime;
-                        logger.info("重试中... 当前波动已重试时间: " + elapsedTime + "ms, 最大重试时间: " + MAX_RETRY_TIME + "ms");
 
                         if (elapsedTime < MAX_RETRY_TIME) {
-                            logger.severe("GetChatData failed, ret: " + ret + ". 重试中...");
                             Thread.sleep(RETRY_INTERVAL);
                             continue;
                         } else {
@@ -211,9 +209,7 @@ public class FetchData {
                 }
                 long currentTime = System.currentTimeMillis();
                 long elapsedTime = currentTime - retryStartTime;
-                logger.severe("当前波动已重试时间: " + elapsedTime + "ms, 最大重试时间: " + MAX_RETRY_TIME + "ms");
                 if (elapsedTime < MAX_RETRY_TIME) {
-                    logger.info("重试中...");
                     try {
                         Thread.sleep(RETRY_INTERVAL);
                     } catch (InterruptedException ex) {
@@ -595,27 +591,22 @@ public class FetchData {
             try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
-                    logger.info("调用 NewMediaData, mediaData: " + mediaData);
 
                     int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
 
                     if (ret != 0) {
                         if (ret == 10010) {
-                            logger.info("GetMediaData failed, ret: " + ret + ". 数据已过期，跳过当前文件: " + sdkfileid);
                             return false; // 跳过当前文件
                         } else if (ret == 10001) {
                             if (!isInRetryPeriod) {
                                 isInRetryPeriod = true;
                                 retryStartTime = System.currentTimeMillis();
-                                logger.info("检测到 ret 10001，开始记录重试时间，retryStartTime: " + retryStartTime);
                             }
 
                             long currentTime = System.currentTimeMillis();
                             long elapsedTime = currentTime - retryStartTime;
-                            logger.info("重试中... 当前重试已用时间: " + elapsedTime + "ms, 最大重试时间: " + MAX_RETRY_TIME + "ms");
 
                             if (elapsedTime < MAX_RETRY_TIME) {
-                                logger.severe("GetMediaData failed, ret: " + ret + ". 重试中...");
                                 Thread.sleep(RETRY_INTERVAL);
                                 continue;
                             } else {
@@ -633,14 +624,12 @@ public class FetchData {
                     if (isInRetryPeriod) {
                         isInRetryPeriod = false;
                         retryStartTime = 0;
-                        logger.info("成功拉取数据，当前重试结束。");
                     }
 
                     fileOutputStream.write(Finance.GetData(mediaData));
                     isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
                     if (!isFinished) {
                         indexbuf = Finance.GetOutIndexBuf(mediaData); // 更新 indexbuf
-                        logger.info("更新 indexbuf: " + indexbuf);
                     }
                     Finance.FreeMediaData(mediaData);
                 }
