@@ -528,7 +528,7 @@ public class FetchData {
                     long taskSdk = Finance.NewSdk();
                     Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
                     try {
-                        boolean fileDownloaded = (taskSdk, sdkfileid, msgtype);
+                        boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
                         if (fileDownloaded) {
                             logAggregator.incrementSuccessCount(); // 使用类级别的 logAggregator
                         } else {
@@ -564,7 +564,7 @@ public class FetchData {
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
     
-        } catch (IOException | CsvValidationException | InterruptedException e) {
+        } catch (IOException | CsvValidationException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             return false;
         }
