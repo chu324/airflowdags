@@ -103,31 +103,26 @@ public class FetchData {
         final long MAX_RETRY_TIME = 30 * 60 * 1000; // 30分钟，仅用于 ret=10001 的情况
         long startTime = System.currentTimeMillis(); // 任务开始时间
         int totalFetched = 0; // 记录总拉取量
-
-        // 波动状态相关变量
+        long lastLogTime = System.currentTimeMillis(); // 记录上次日志打印时间
+    
         boolean isInRetryPeriod = false; // 是否处于波动中
         long retryStartTime = 0; // 当前波动的开始时间
-
+    
         while (hasMoreData) {
             long slice = Finance.NewSlice();
             long batchStartTime = System.currentTimeMillis(); // 记录批次开始时间
             try {
                 logger.info("开始调用 GetChatData, lastSeq = " + lastSeq);
                 long ret = Finance.GetChatData(sdk, lastSeq, limit, "", "", 10, slice);
-
+    
                 if (ret != 0) {
                     if (ret == 10001) {
-                        // 如果当前不处于波动中，则开始记录波动时间
                         if (!isInRetryPeriod) {
-                            isInRetryPeriod = true; // 进入波动状态
-                            retryStartTime = System.currentTimeMillis(); // 记录波动开始时间
+                            isInRetryPeriod = true;
+                            retryStartTime = System.currentTimeMillis();
                             logger.info("检测到 ret 10001，开始记录波动时间，retryStartTime: " + retryStartTime);
                         }
-
-                        // 计算当前波动已重试时间
-                        long currentTime = System.currentTimeMillis();
-                        long elapsedTime = currentTime - retryStartTime;
-
+                        long elapsedTime = System.currentTimeMillis() - retryStartTime;
                         if (elapsedTime < MAX_RETRY_TIME) {
                             Thread.sleep(RETRY_INTERVAL);
                             continue;
@@ -142,35 +137,32 @@ public class FetchData {
                         return false;
                     }
                 }
-
-                // 如果成功拉取数据，则标记波动结束
+    
                 if (isInRetryPeriod) {
-                    isInRetryPeriod = false; // 退出波动状态
-                    retryStartTime = 0; // 重置波动开始时间
+                    isInRetryPeriod = false;
+                    retryStartTime = 0;
                     logger.info("成功拉取数据，当前波动结束。");
                 }
-
+    
                 String content = Finance.GetContentFromSlice(slice);
                 if (content == null || content.isEmpty()) {
                     logger.severe("GetContentFromSlice 返回空数据");
                     return false;
                 }
-
-                // 将拉取的数据追加到 raw 文件
+    
                 appendToRawFile(content);
-
                 JsonNode rootNode = objectMapper.readTree(content);
                 JsonNode chatDataNode = rootNode.path("chatdata");
-
+    
                 if (chatDataNode.isMissingNode() || !chatDataNode.isArray()) {
                     logger.severe("chatdata 字段缺失或格式错误");
                     return false;
                 }
-
+    
                 int maxSeqInBatch = lastSeq;
-                int batchSize = chatDataNode.size(); // 本次拉取的数据量
-                totalFetched += batchSize; // 更新总拉取量
-
+                int batchSize = chatDataNode.size();
+                totalFetched += batchSize;
+    
                 for (JsonNode chatData : chatDataNode) {
                     String seqStr = chatData.path("seq").asText();
                     int currentSeq = Integer.parseInt(seqStr);
@@ -178,21 +170,20 @@ public class FetchData {
                         maxSeqInBatch = currentSeq;
                     }
                 }
-
-                // 更新 lastSeq
+    
                 lastSeq = maxSeqInBatch + 1;
                 SeqHistoryUtil.saveLastSeq(lastSeq);
-
-                // 计算批次耗时
                 long batchDuration = System.currentTimeMillis() - batchStartTime;
-
-                // 优化后的日志输出
-                logger.info(String.format(
-                    "[任务进度] 已拉取数据: %d 条, 数据范围: seq=%d~%d, 耗时: %dms, 总拉取量: %d 条",
-                    batchSize, lastSeq - batchSize, lastSeq - 1, batchDuration, totalFetched
-                ));
-
-                // 如果拉取的数据量少于 limit，说明没有更多数据了
+    
+                // **新增：每 60 秒打印一次日志**
+                if (System.currentTimeMillis() - lastLogTime >= 60000) {
+                    logger.info(String.format(
+                        "[任务进度] 已拉取数据: %d 条, 数据范围: seq=%d~%d, 耗时: %dms, 总拉取量: %d 条",
+                        batchSize, lastSeq - batchSize, lastSeq - 1, batchDuration, totalFetched
+                    ));
+                    lastLogTime = System.currentTimeMillis(); // 更新上次日志时间
+                }
+    
                 if (batchSize < limit) {
                     hasMoreData = false;
                     logger.info("所有数据已拉取完成！");
@@ -204,11 +195,10 @@ public class FetchData {
             } catch (Exception e) {
                 logger.severe("拉取数据失败: " + e.getMessage());
                 if (!isInRetryPeriod) {
-                    isInRetryPeriod = true; // 进入波动状态
-                    retryStartTime = System.currentTimeMillis(); // 记录波动开始时间
+                    isInRetryPeriod = true;
+                    retryStartTime = System.currentTimeMillis();
                 }
-                long currentTime = System.currentTimeMillis();
-                long elapsedTime = currentTime - retryStartTime;
+                long elapsedTime = System.currentTimeMillis() - retryStartTime;
                 if (elapsedTime < MAX_RETRY_TIME) {
                     try {
                         Thread.sleep(RETRY_INTERVAL);
@@ -228,7 +218,7 @@ public class FetchData {
                 }
             }
         }
-
+    
         return true;
     }
 
