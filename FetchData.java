@@ -655,12 +655,6 @@ public class FetchData {
             uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
             return true;
     
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.severe("线程被中断: " + e.getMessage());
-            logAggregator.logFailureCategory("线程中断", sdkfileid);
-            saveFailedRecordsToCSV("线程中断", sdkfileid, -1);
-            return false;
         } catch (IOException e) {
             logger.severe("文件操作失败: " + e.getMessage());
             logAggregator.logFailureCategory("文件操作失败", sdkfileid);
