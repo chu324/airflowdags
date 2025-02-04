@@ -749,7 +749,7 @@ public class FetchData {
             if (new File(failedRecordsFilePath).exists()) {
                 String failedRecordsS3Key = "rejected/wecom_chat/" + taskDateStr + "/failed_records_" + taskDateStr + ".csv";
                 logger.info("开始上传 failed_records 文件到 S3: " + failedRecordsS3Key);
-                uploadFileToS3(failedRecordsFilePath, "175826060701-eds-qa-cn-north-1", failedRecordsS3Key);
+                uploadFileToS3(failedRecordsFilePath, mediaS3BucketName, failedRecordsS3Key);
                 logger.info("failed_records 文件上传完成: " + failedRecordsS3Key);
             }
     
