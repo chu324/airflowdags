@@ -543,20 +543,32 @@ public class FetchData {
                     }
                 });
             }
-    
-            // 关闭线程池并等待所有任务完成
-            executorService.shutdown();
+            
             // 关闭线程池并等待所有任务完成
             executorService.shutdown();
             try {
-                executorService.awaitTermination(1, TimeUnit.HOURS);
+                if (!executorService.awaitTermination(1, TimeUnit.HOURS)) {
+                    logger.warning("线程池未能在指定时间内关闭，强制关闭");
+                    executorService.shutdownNow();
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 logger.severe("线程池关闭中断: " + e.getMessage());
+                executorService.shutdownNow();
             }
     
             // 关闭定时任务
             scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
+                    logger.warning("定时任务未能在指定时间内关闭，强制关闭");
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.severe("定时任务关闭中断: " + e.getMessage());
+                scheduler.shutdownNow();
+            }
     
             // 最终统计信息
             logAggregator.logStatistics(); // 使用类级别的 logAggregator
