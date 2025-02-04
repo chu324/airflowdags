@@ -497,6 +497,30 @@ public class FetchData {
         List<String> sdkfileids = new ArrayList<>();
         int totalMediaFiles = 0; // 用于统计 sdkfileid 的总行数
     
+        // 读取 CSV 文件的总行数
+        try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath))) {
+            // 跳过标题行
+            reader.readLine();
+            // 统计 CSV 文件的总行数
+            totalMediaFiles = (int) reader.lines().count();
+            logger.info("media_files.csv 文件的总行数: " + totalMediaFiles);
+        } catch (IOException e) {
+            logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
+            logAggregator.setTotalMediaFiles(0);
+            return false;
+        }
+    
+        // 如果文件为空或没有记录，设置总文件数为 0
+        if (totalMediaFiles == 0) {
+            logger.warning("media_files.csv 文件中没有记录！");
+            logAggregator.setTotalMediaFiles(0);
+            return false;
+        }
+    
+        // 设置总文件数
+        logAggregator.setTotalMediaFiles(totalMediaFiles);
+    
+        // 初始化 CSVReader
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -515,7 +539,6 @@ public class FetchData {
                 }
     
                 hasRecords = true;
-                totalMediaFiles++; // 统计 sdkfileid 的总行数
     
                 // 检查 CSV 行格式
                 if (fields.length < 2) {
@@ -527,7 +550,6 @@ public class FetchData {
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
-                logAggregator.incrementTotalMediaFiles(); // 更新总文件数
                 futures.add(executorService.submit(() -> {
                     long taskSdk = Finance.NewSdk();
                     Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
@@ -548,9 +570,6 @@ public class FetchData {
                 }));
                 sdkfileids.add(sdkfileid);
             }
-    
-            // 设置总文件数
-            logAggregator.setTotalMediaFiles(totalMediaFiles);
     
             if (!hasRecords) {
                 logger.warning("media_files.csv 文件中没有记录！");
