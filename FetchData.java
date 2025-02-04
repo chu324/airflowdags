@@ -484,15 +484,6 @@ public class FetchData {
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
     
-        // 初始化日志聚合器
-        LogAggregator logAggregator = new LogAggregator(); // 移除这一行，因为它已经在类级别声明了
-    
-        // 定时任务，每10分钟输出一次统计信息
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-        scheduler.scheduleAtFixedRate(() -> {
-            logAggregator.logStatistics();
-        }, 0, 10, TimeUnit.MINUTES);
-    
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -503,8 +494,14 @@ public class FetchData {
             String[] fields;
             boolean isHeader = true;
     
-            // 创建线程池，并行度为 100
+            // 创建线程池，并行度为 20
             ExecutorService executorService = Executors.newFixedThreadPool(20);
+    
+            // 定时任务，每10分钟输出一次统计信息
+            ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+            scheduler.scheduleAtFixedRate(() -> {
+                logAggregator.logStatistics();
+            }, 0, 10, TimeUnit.MINUTES);
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -514,6 +511,7 @@ public class FetchData {
     
                 if (fields.length < 2) {
                     logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
+                    logAggregator.incrementFailureCount();
                     continue;
                 }
     
@@ -521,7 +519,7 @@ public class FetchData {
                 String sdkfileid = fields[1];
     
                 // 更新总文件数统计
-                logAggregator.incrementTotalMediaFiles(); // 使用类级别的 logAggregator
+                logAggregator.incrementTotalMediaFiles();
     
                 // 为每个任务创建独立的 SDK 实例
                 executorService.submit(() -> {
@@ -530,14 +528,14 @@ public class FetchData {
                     try {
                         boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
                         if (fileDownloaded) {
-                            logAggregator.incrementSuccessCount(); // 使用类级别的 logAggregator
+                            logAggregator.incrementSuccessCount();
                         } else {
-                            logAggregator.incrementFailureCount(); // 使用类级别的 logAggregator
-                            logAggregator.logFailureCategory("下载失败", sdkfileid); // 使用类级别的 logAggregator
+                            logAggregator.incrementFailureCount();
+                            logAggregator.logFailureCategory("下载失败", sdkfileid);
                         }
                     } catch (Exception e) {
-                        logAggregator.incrementFailureCount(); // 使用类级别的 logAggregator
-                        logAggregator.logFailureCategory("异常", sdkfileid); // 使用类级别的 logAggregator
+                        logAggregator.incrementFailureCount();
+                        logAggregator.logFailureCategory("异常", sdkfileid);
                     } finally {
                         Finance.DestroySdk(taskSdk);
                     }
@@ -546,10 +544,10 @@ public class FetchData {
     
             // 关闭线程池并等待所有任务完成
             executorService.shutdown();
-            // 关闭线程池并等待所有任务完成
-            executorService.shutdown();
             try {
-                executorService.awaitTermination(1, TimeUnit.HOURS);
+                if (!executorService.awaitTermination(1, TimeUnit.HOURS)) {
+                    logger.severe("线程池关闭超时，部分任务未完成");
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 logger.severe("线程池关闭中断: " + e.getMessage());
@@ -557,9 +555,17 @@ public class FetchData {
     
             // 关闭定时任务
             scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
+                    logger.warning("定时任务关闭超时");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.severe("定时任务关闭中断: " + e.getMessage());
+            }
     
             // 最终统计信息
-            logAggregator.logStatistics(); // 使用类级别的 logAggregator
+            logAggregator.logStatistics();
     
             logger.info("所有媒体文件已处理完成");
             return allFilesDownloaded;
