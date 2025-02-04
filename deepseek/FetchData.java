@@ -484,9 +484,6 @@ public class FetchData {
         // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
     
-        // 初始化日志聚合器
-        LogAggregator logAggregator = new LogAggregator(); // 移除这一行，因为它已经在类级别声明了
-    
         // 定时任务，每10分钟输出一次统计信息
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
@@ -503,8 +500,11 @@ public class FetchData {
             String[] fields;
             boolean isHeader = true;
     
-            // 创建线程池，并行度为 100
+            // 创建线程池，并行度为 20
             ExecutorService executorService = Executors.newFixedThreadPool(20);
+    
+            // 用于提交任务并处理超时
+            List<Future<?>> futures = new ArrayList<>();
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -521,42 +521,63 @@ public class FetchData {
                 String sdkfileid = fields[1];
     
                 // 更新总文件数统计
-                logAggregator.incrementTotalMediaFiles(); // 使用类级别的 logAggregator
+                logAggregator.incrementTotalMediaFiles();
     
-                // 为每个任务创建独立的 SDK 实例
-                executorService.submit(() -> {
+                // 提交任务到线程池
+                Future<?> future = executorService.submit(() -> {
                     long taskSdk = Finance.NewSdk();
                     Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
                     try {
                         boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
                         if (fileDownloaded) {
-                            logAggregator.incrementSuccessCount(); // 使用类级别的 logAggregator
+                            logAggregator.incrementSuccessCount();
                         } else {
-                            logAggregator.incrementFailureCount(); // 使用类级别的 logAggregator
-                            logAggregator.logFailureCategory("下载失败", sdkfileid); // 使用类级别的 logAggregator
+                            logAggregator.incrementFailureCount();
+                            logAggregator.logFailureCategory("下载失败", sdkfileid);
                         }
                     } catch (Exception e) {
-                        logAggregator.incrementFailureCount(); // 使用类级别的 logAggregator
-                        logAggregator.logFailureCategory("异常", sdkfileid); // 使用类级别的 logAggregator
+                        logAggregator.incrementFailureCount();
+                        logAggregator.logFailureCategory("异常", sdkfileid);
                     } finally {
                         Finance.DestroySdk(taskSdk);
                     }
                 });
-            }
-            
-            // 关闭线程池并等待所有任务完成
-            executorService.shutdown();
-            try {
-                if (!executorService.awaitTermination(1, TimeUnit.HOURS)) {
-                    logger.warning("线程池未能在指定时间内关闭，强制关闭");
-                    executorService.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                logger.severe("线程池关闭中断: " + e.getMessage());
-                executorService.shutdownNow();
+    
+                futures.add(future);
             }
     
+            // 等待所有任务完成，每个任务单独设置超时时间
+            for (Future<?> future : futures) {
+                try {
+                    future.get(30, TimeUnit.MINUTES); // 每个任务超时时间为30分钟
+                } catch (TimeoutException e) {
+                    logger.warning("任务超时，已取消: " + e.getMessage());
+                    future.cancel(true);
+                    logAggregator.incrementFailureCount();
+                    logAggregator.logFailureCategory("任务超时", sdkfileid);
+                    saveFailedRecordsToCSV("任务超时", sdkfileid, -1);
+                } catch (ExecutionException e) {
+                    logger.severe("任务执行失败: " + e.getCause().getMessage());
+                    logAggregator.incrementFailureCount();
+                    logAggregator.logFailureCategory("任务执行失败", sdkfileid);
+                    saveFailedRecordsToCSV("任务执行失败", sdkfileid, -1);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    logger.severe("线程被中断: " + e.getMessage());
+                    logAggregator.incrementFailureCount();
+                    logAggregator.logFailureCategory("线程中断", sdkfileid);
+                    saveFailedRecordsToCSV("线程中断", sdkfileid, -1);
+                }
+            }
+    
+            // 关闭线程池
+            executorService.shutdown();
+    
+        } catch (IOException | CsvValidationException e) {
+            logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
+            logAggregator.incrementFailureCount();
+            return false;
+        } finally {
             // 关闭定时任务
             scheduler.shutdown();
             try {
@@ -571,122 +592,118 @@ public class FetchData {
             }
     
             // 最终统计信息
-            logAggregator.logStatistics(); // 使用类级别的 logAggregator
-    
+            logAggregator.logStatistics();
             logger.info("所有媒体文件已处理完成");
-            return allFilesDownloaded;
-    
-        } catch (IOException | CsvValidationException e) {
-            logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
-            return false;
         }
+    
+        return allFilesDownloaded;
     }
 
     private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype) {
-      if (sdkfileid == null || sdkfileid.isEmpty()) {
-          logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
-          return false;
-      }
-  
-      String indexbuf = "";
-      boolean isFinished = false;
-  
-      final long RETRY_INTERVAL = 10 * 1000;
-      final long MAX_RETRY_TIME = 30 * 60 * 1000;
-      long retryStartTime = System.currentTimeMillis();
-      boolean isInRetryPeriod = false;
-  
-      File tempFile = null;
-      try {
-          tempFile = File.createTempFile("media_", ".tmp");
-          try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
-              long retryCount = 0;
-              while (!isFinished) {
-                  long mediaData = Finance.NewMediaData();
-  
-                  int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
-  
-                  if (ret != 0) {
-                      if (ret == 10010) {
-                          Finance.FreeMediaData(mediaData);
-                          return false;
-                      } else if (ret == 10001) {
-                          retryCount++;
-                          if (!isInRetryPeriod) {
-                              isInRetryPeriod = true;
-                              retryStartTime = System.currentTimeMillis();
-                          }
-  
-                          long currentTime = System.currentTimeMillis();
-                          long elapsedTime = currentTime - retryStartTime;
-  
-                          if (elapsedTime < MAX_RETRY_TIME) {
-                              logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
-                              Thread.sleep(RETRY_INTERVAL);
-                              continue;
-                          } else {
-                              logger.severe("GetMediaData failed, ret: " + ret + ". 当前重试超过最大重试时间.");
-                              Finance.FreeMediaData(mediaData);
-                              logAggregator.logFailureCategory("下载超时", sdkfileid);
-                              saveFailedRecordsToCSV("下载超时", sdkfileid, ret);
-                              return false;
-                          }
-                      } else {
-                          logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
-                          logAggregator.logApiErrorCode(ret);
-                          Finance.FreeMediaData(mediaData);
-                          logAggregator.logFailureCategory("API 错误（非 10001）", sdkfileid);
-                          saveFailedRecordsToCSV("API 错误（非 10001）", sdkfileid, ret);
-                          return false;
-                      }
-                  }
-  
-                  if (isInRetryPeriod) {
-                      isInRetryPeriod = false;
-                      retryStartTime = 0;
-                  }
-  
-                  fileOutputStream.write(Finance.GetData(mediaData));
-                  isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
-                  if (!isFinished) {
-                      indexbuf = Finance.GetOutIndexBuf(mediaData);
-                  }
-                  Finance.FreeMediaData(mediaData);
-              }
-          }
-  
-          // 生成 S3 文件路径
-          String s3Key;
-          if ("unknown".equals(msgtype)) {
-              s3Key = String.format("raw/wecom_chat/media/unknown/%s.%s",
-                      sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
-          } else {
-              s3Key = String.format("raw/wecom_chat/media/%s/%s.%s",
-                      msgtype, sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
-          }
-  
-          // 上传临时文件到 S3
-          uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-          return true;
-  
-      } catch (IOException e) {
-          logger.severe("文件操作失败: " + e.getMessage());
-          logAggregator.logFailureCategory("文件操作失败", sdkfileid);
-          saveFailedRecordsToCSV("文件操作失败", sdkfileid, -1);
-          return false;
-      } catch (Exception e) {
-          logger.severe("未知异常: " + e.getMessage());
-          logAggregator.logFailureCategory("未知异常", sdkfileid);
-          saveFailedRecordsToCSV("未知异常", sdkfileid, -1);
-          return false;
-      } finally {
-          if (tempFile != null && tempFile.exists()) {
-              if (!tempFile.delete()) {
-                  logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
-              }
-          }
-      }
-  }
+        if (sdkfileid == null || sdkfileid.isEmpty()) {
+            logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
+            return false;
+        }
+    
+        String indexbuf = "";
+        boolean isFinished = false;
+    
+        final long RETRY_INTERVAL = 10 * 1000;
+        final long MAX_RETRY_TIME = 30 * 60 * 1000;
+        long retryStartTime = System.currentTimeMillis();
+        boolean isInRetryPeriod = false;
+    
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("media_", ".tmp");
+            try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
+                long retryCount = 0;
+                while (!isFinished) {
+                    long mediaData = Finance.NewMediaData();
+    
+                    int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
+    
+                    if (ret != 0) {
+                        if (ret == 10010) {
+                            logger.info("SDK 返回 10010，跳过下载");
+                            Finance.FreeMediaData(mediaData);
+                            return false;
+                        } else if (ret == 10001) {
+                            retryCount++;
+                            if (!isInRetryPeriod) {
+                                isInRetryPeriod = true;
+                                retryStartTime = System.currentTimeMillis();
+                            }
+    
+                            long currentTime = System.currentTimeMillis();
+                            long elapsedTime = currentTime - retryStartTime;
+    
+                            if (elapsedTime < MAX_RETRY_TIME) {
+                                logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
+                                Thread.sleep(RETRY_INTERVAL);
+                                continue;
+                            } else {
+                                logger.severe("下载失败，超过最大重试时间");
+                                Finance.FreeMediaData(mediaData);
+                                logAggregator.logFailureCategory("下载超时", sdkfileid);
+                                saveFailedRecordsToCSV("下载超时", sdkfileid, ret);
+                                return false;
+                            }
+                        } else {
+                            logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
+                            logAggregator.logApiErrorCode(ret);
+                            Finance.FreeMediaData(mediaData);
+                            logAggregator.logFailureCategory("API 错误", sdkfileid);
+                            saveFailedRecordsToCSV("API 错误", sdkfileid, ret);
+                            return false;
+                        }
+                    }
+    
+                    if (isInRetryPeriod) {
+                        isInRetryPeriod = false;
+                        retryStartTime = 0;
+                    }
+    
+                    fileOutputStream.write(Finance.GetData(mediaData));
+                    isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
+                    if (!isFinished) {
+                        indexbuf = Finance.GetOutIndexBuf(mediaData);
+                    }
+                    Finance.FreeMediaData(mediaData);
+                }
+            }
+    
+            String s3Key;
+            if ("unknown".equals(msgtype)) {
+                s3Key = String.format("raw/wecom_chat/media/unknown/%s.%s",
+                        sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
+            } else {
+                s3Key = String.format("raw/wecom_chat/media/%s/%s.%s",
+                        msgtype, sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
+            }
+    
+            uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+            logAggregator.incrementSuccessCount();
+            return true;
+    
+        } catch (IOException e) {
+            logger.severe("文件操作失败: " + e.getMessage());
+            logAggregator.logFailureCategory("文件操作失败", sdkfileid);
+            saveFailedRecordsToCSV("文件操作失败", sdkfileid, -1);
+            return false;
+        } catch (Exception e) {
+            logger.severe("未知异常: " + e.getMessage());
+            logAggregator.logFailureCategory("未知异常", sdkfileid);
+            saveFailedRecordsToCSV("未知异常", sdkfileid, -1);
+            return false;
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                if (!tempFile.delete()) {
+                    logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
+                }
+            }
+        }
+    }
 
     private static String getFileExtension(String fileName) {
         int lastDotIndex = fileName.lastIndexOf('.');
