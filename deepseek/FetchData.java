@@ -491,6 +491,12 @@ public class FetchData {
             logAggregator.logStatistics();
         }, 0, 10, TimeUnit.MINUTES);
     
+        // 初始化线程池和相关变量
+        ExecutorService executorService = Executors.newFixedThreadPool(10); // 线程池大小限制为 10
+        List<Future<?>> futures = new ArrayList<>();
+        List<String> sdkfileids = new ArrayList<>();
+        int totalMediaFiles = 0; // 用于统计 sdkfileid 的总行数
+    
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -501,7 +507,6 @@ public class FetchData {
             String[] fields;
             boolean isHeader = true;
             boolean hasRecords = false;
-            int totalMediaFiles = 0; // 用于统计 sdkfileid 的总行数
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -541,6 +546,7 @@ public class FetchData {
                         Finance.DestroySdk(taskSdk);
                     }
                 }));
+                sdkfileids.add(sdkfileid);
             }
     
             // 设置总文件数
@@ -551,54 +557,53 @@ public class FetchData {
                 logAggregator.setTotalMediaFiles(0);
             }
     
-            // 等待所有任务完成
-            for (int i = 0; i < futures.size(); i++) {
-                Future<?> future = futures.get(i);
-                String sdkfileid = sdkfileids.get(i);
-                try {
-                    future.get(5, TimeUnit.MINUTES); // 每个任务超时时间为 5 分钟
-                } catch (TimeoutException e) {
-                    logger.warning("任务超时，已取消: " + e.getMessage());
-                    future.cancel(true);
-                    logAggregator.incrementFailureCount();
-                    logAggregator.logFailureCategory("任务超时", sdkfileid);
-                    saveFailedRecordsToCSV("任务超时", sdkfileid, -1);
-                } catch (ExecutionException e) {
-                    logger.severe("任务执行失败: " + e.getCause().getMessage());
-                    logAggregator.incrementFailureCount();
-                    logAggregator.logFailureCategory("任务执行失败", sdkfileid);
-                    saveFailedRecordsToCSV("任务执行失败", sdkfileid, -1);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    logger.severe("线程被中断: " + e.getMessage());
-                    logAggregator.incrementFailureCount();
-                    logAggregator.logFailureCategory("线程中断", sdkfileid);
-                    saveFailedRecordsToCSV("线程中断", sdkfileid, -1);
-                }
-            }
-    
-            executorService.shutdown();
-    
         } catch (IOException | CsvValidationException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             logAggregator.setTotalMediaFiles(0);
             return false;
-        } finally {
-            scheduler.shutdown();
+        }
+    
+        // 等待所有任务完成
+        for (int i = 0; i < futures.size(); i++) {
+            Future<?> future = futures.get(i);
+            String sdkfileid = sdkfileids.get(i);
             try {
-                if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
-                    logger.warning("定时任务未能在指定时间内关闭，强制关闭");
-                    scheduler.shutdownNow();
-                }
+                future.get(5, TimeUnit.MINUTES); // 每个任务超时时间为 5 分钟
+            } catch (TimeoutException e) {
+                logger.warning("任务超时，已取消: " + e.getMessage());
+                future.cancel(true);
+                logAggregator.incrementFailureCount();
+                logAggregator.logFailureCategory("任务超时", sdkfileid);
+                saveFailedRecordsToCSV("任务超时", sdkfileid, -1);
+            } catch (ExecutionException e) {
+                logger.severe("任务执行失败: " + e.getCause().getMessage());
+                logAggregator.incrementFailureCount();
+                logAggregator.logFailureCategory("任务执行失败", sdkfileid);
+                saveFailedRecordsToCSV("任务执行失败", sdkfileid, -1);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                logger.severe("定时任务关闭中断: " + e.getMessage());
+                logger.severe("线程被中断: " + e.getMessage());
+                logAggregator.incrementFailureCount();
+                logAggregator.logFailureCategory("线程中断", sdkfileid);
+                saveFailedRecordsToCSV("线程中断", sdkfileid, -1);
+            }
+        }
+    
+        executorService.shutdown();
+    
+        try {
+            if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
+                logger.warning("定时任务未能在指定时间内关闭，强制关闭");
                 scheduler.shutdownNow();
             }
-    
-            logAggregator.logStatistics(); // 手动生成统计信息
-            logger.info("所有媒体文件已处理完成");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.severe("定时任务关闭中断: " + e.getMessage());
+            scheduler.shutdownNow();
         }
+    
+        logAggregator.logStatistics(); // 手动生成统计信息
+        logger.info("所有媒体文件已处理完成");
     
         return allFilesDownloaded;
     }
