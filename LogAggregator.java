@@ -50,6 +50,10 @@ public class LogAggregator {
         apiErrorCodesMap.computeIfAbsent(retCode, k -> new AtomicInteger(0)).incrementAndGet();
     }
 
+    public void setTotalMediaFiles(int total) {
+        this.totalMediaFiles.set(total);
+    }
+
     public void logStatistics() {
         System.out.println("定时任务触发，正在输出统计信息...");
         System.out.println(String.format("[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d",
