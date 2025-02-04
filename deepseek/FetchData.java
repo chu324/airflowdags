@@ -481,9 +481,11 @@ public class FetchData {
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
     
+        // 初始化 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("正在读取 media_files.csv 文件: " + mediaFilesPath);
     
+        // 初始化定时任务
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             logAggregator.logStatistics();
@@ -499,12 +501,7 @@ public class FetchData {
             String[] fields;
             boolean isHeader = true;
             boolean hasRecords = false;
-    
-            ExecutorService executorService = Executors.newFixedThreadPool(10); // 线程池大小限制为 10
-    
-            List<Future<?>> futures = new ArrayList<>();
-            List<String> sdkfileids = new ArrayList<>();
-            long delay = 0; // 动态延迟
+            int totalMediaFiles = 0; // 用于统计 sdkfileid 的总行数
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -513,13 +510,15 @@ public class FetchData {
                 }
     
                 hasRecords = true;
-                logger.info("处理媒体文件记录: " + Arrays.toString(fields)); // 调试日志
+                totalMediaFiles++; // 统计 sdkfileid 的总行数
     
+                // 检查 CSV 行格式
                 if (fields.length < 2) {
                     logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
                     continue;
                 }
     
+                // 处理行数据
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
@@ -542,24 +541,17 @@ public class FetchData {
                         Finance.DestroySdk(taskSdk);
                     }
                 }));
-                sdkfileids.add(sdkfileid);
-    
-                // 动态控制任务提交速率
-                try {
-                    Thread.sleep(delay);
-                    delay += 100; // 每次提交任务时，延时 100ms
-                } catch (InterruptedException e) {
-                    logger.warning("任务提交线程被中断: " + e.getMessage());
-                    Thread.currentThread().interrupt(); // 恢复中断状态
-                }
-
-                delay += 100; // 每次提交任务时，延时 100ms
             }
+    
+            // 设置总文件数
+            logAggregator.setTotalMediaFiles(totalMediaFiles);
     
             if (!hasRecords) {
                 logger.warning("media_files.csv 文件中没有记录！");
+                logAggregator.setTotalMediaFiles(0);
             }
     
+            // 等待所有任务完成
             for (int i = 0; i < futures.size(); i++) {
                 Future<?> future = futures.get(i);
                 String sdkfileid = sdkfileids.get(i);
@@ -589,7 +581,7 @@ public class FetchData {
     
         } catch (IOException | CsvValidationException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
-            logAggregator.incrementFailureCount();
+            logAggregator.setTotalMediaFiles(0);
             return false;
         } finally {
             scheduler.shutdown();
