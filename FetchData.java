@@ -596,7 +596,6 @@ public class FetchData {
     
                     if (ret != 0) {
                         if (ret == 10010) {
-                            logger.warning("SDK 返回 10010，跳过当前文件: sdkfileid=" + sdkfileid);
                             Finance.FreeMediaData(mediaData);
                             return false;
                         } else if (ret == 10001) {
