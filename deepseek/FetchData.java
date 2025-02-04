@@ -545,7 +545,14 @@ public class FetchData {
                 sdkfileids.add(sdkfileid);
     
                 // 动态控制任务提交速率
-                Thread.sleep(delay);
+                try {
+                    Thread.sleep(delay);
+                    delay += 100; // 每次提交任务时，延时 100ms
+                } catch (InterruptedException e) {
+                    logger.warning("任务提交线程被中断: " + e.getMessage());
+                    Thread.currentThread().interrupt(); // 恢复中断状态
+                }
+
                 delay += 100; // 每次提交任务时，延时 100ms
             }
     
