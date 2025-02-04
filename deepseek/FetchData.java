@@ -505,6 +505,7 @@ public class FetchData {
     
             // 用于提交任务并处理超时
             List<Future<?>> futures = new ArrayList<>();
+            List<String> sdkfileids = new ArrayList<>(); // 记录每个任务的 sdkfileid
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -544,10 +545,13 @@ public class FetchData {
                 });
     
                 futures.add(future);
+                sdkfileids.add(sdkfileid); // 保存 sdkfileid 用于后续处理
             }
     
             // 等待所有任务完成，每个任务单独设置超时时间
-            for (Future<?> future : futures) {
+            for (int i = 0; i < futures.size(); i++) {
+                Future<?> future = futures.get(i);
+                String sdkfileid = sdkfileids.get(i); // 获取对应的 sdkfileid
                 try {
                     future.get(30, TimeUnit.MINUTES); // 每个任务超时时间为30分钟
                 } catch (TimeoutException e) {
