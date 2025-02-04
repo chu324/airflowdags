@@ -56,7 +56,7 @@ public class FetchData {
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
         ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai")); // 确保使用北京时间
         taskDateStr = now.format(formatter);
-
+    
         // 初始化 raw 文件路径
         String rawDirPath = "data/raw/" + taskDateStr;
         File rawDir = new File(rawDirPath);
@@ -64,7 +64,7 @@ public class FetchData {
             rawDir.mkdirs(); // 创建目录
         }
         rawFilePath = rawDirPath + "/wecom_chat_" + taskDateStr + "_raw.csv";
-
+    
         // 初始化 curated 文件路径
         String curatedDirPath = "data/curated/" + taskDateStr;
         File curatedDir = new File(curatedDirPath);
@@ -72,29 +72,29 @@ public class FetchData {
             curatedDir.mkdirs(); // 创建目录
         }
         curatedFilePath = curatedDirPath + "/chat_" + taskDateStr + ".csv";
-
+    
         // 阶段 1: 拉取数据
         if (!fetchData(sdk)) {
             return false;
         }
-
+    
         // 阶段 2: 解密数据并保存到 curated 文件
         boolean decryptSuccess = decryptAndSaveToCurated(sdk);
         if (!decryptSuccess) {
             logger.warning("解密并保存到 curated 文件失败，但仍将继续下载媒体文件");
         }
-
+    
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
         if (!mediaDownloadSuccess) {
             logger.severe("部分媒体文件下载失败，但仍将继续上传 raw 和 curated 文件到 S3");
         }
-
+    
         // 阶段 4: 压缩并上传 raw 和 curated 文件到 S3
         if (!compressAndUploadFilesToS3()) {
             return false;
         }
-
+    
         return true;
     }
 
@@ -177,7 +177,7 @@ public class FetchData {
                 SeqHistoryUtil.saveLastSeq(lastSeq);
                 long batchDuration = System.currentTimeMillis() - batchStartTime;
     
-                // **新增：每 60 秒打印一次日志**
+                // 每 60 秒打印一次日志
                 if (System.currentTimeMillis() - lastLogTime >= 60000) {
                     logger.info(String.format(
                         "[任务进度] 已拉取数据: %d 条, 数据范围: seq=%d~%d, 耗时: %dms, 总拉取量: %d 条",
@@ -481,10 +481,8 @@ public class FetchData {
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
     
-        // 定义 media_files.csv 文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
     
-        // 定时任务，每10分钟输出一次统计信息
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             logAggregator.logStatistics();
@@ -500,12 +498,11 @@ public class FetchData {
             String[] fields;
             boolean isHeader = true;
     
-            // 创建线程池，并行度为 20
-            ExecutorService executorService = Executors.newFixedThreadPool(20);
+            ExecutorService executorService = Executors.newFixedThreadPool(10); // 线程池大小限制为 10
     
-            // 用于提交任务并处理超时
             List<Future<?>> futures = new ArrayList<>();
-            List<String> sdkfileids = new ArrayList<>(); // 记录每个任务的 sdkfileid
+            List<String> sdkfileids = new ArrayList<>();
+            long delay = 0; // 动态延迟
     
             while ((fields = csvReader.readNext()) != null) {
                 if (isHeader) {
@@ -521,10 +518,8 @@ public class FetchData {
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
-                // 更新总文件数统计
                 logAggregator.incrementTotalMediaFiles();
     
-                // 提交任务到线程池
                 Future<?> future = executorService.submit(() -> {
                     long taskSdk = Finance.NewSdk();
                     Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
@@ -545,15 +540,18 @@ public class FetchData {
                 });
     
                 futures.add(future);
-                sdkfileids.add(sdkfileid); // 保存 sdkfileid 用于后续处理
+                sdkfileids.add(sdkfileid);
+    
+                // 动态控制任务提交速率
+                Thread.sleep(delay);
+                delay += 100; // 每次提交任务时，延时 100ms
             }
     
-            // 等待所有任务完成，每个任务单独设置超时时间
             for (int i = 0; i < futures.size(); i++) {
                 Future<?> future = futures.get(i);
-                String sdkfileid = sdkfileids.get(i); // 获取对应的 sdkfileid
+                String sdkfileid = sdkfileids.get(i);
                 try {
-                    future.get(30, TimeUnit.MINUTES); // 每个任务超时时间为30分钟
+                    future.get(5, TimeUnit.MINUTES); // 每个任务超时时间为 5 分钟
                 } catch (TimeoutException e) {
                     logger.warning("任务超时，已取消: " + e.getMessage());
                     future.cancel(true);
@@ -574,7 +572,6 @@ public class FetchData {
                 }
             }
     
-            // 关闭线程池
             executorService.shutdown();
     
         } catch (IOException | CsvValidationException e) {
@@ -582,7 +579,6 @@ public class FetchData {
             logAggregator.incrementFailureCount();
             return false;
         } finally {
-            // 关闭定时任务
             scheduler.shutdown();
             try {
                 if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
@@ -595,7 +591,6 @@ public class FetchData {
                 scheduler.shutdownNow();
             }
     
-            // 最终统计信息
             logAggregator.logStatistics();
             logger.info("所有媒体文件已处理完成");
         }
@@ -612,16 +607,12 @@ public class FetchData {
         String indexbuf = "";
         boolean isFinished = false;
     
-        final long RETRY_INTERVAL = 10 * 1000;
-        final long MAX_RETRY_TIME = 30 * 60 * 1000;
-        long retryStartTime = System.currentTimeMillis();
-        boolean isInRetryPeriod = false;
-    
         File tempFile = null;
         try {
             tempFile = File.createTempFile("media_", ".tmp");
             try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
-                long retryCount = 0;
+                int retryCount = 0;
+                long retryInterval = 500; // 初始重试间隔为 500ms
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
     
@@ -634,25 +625,17 @@ public class FetchData {
                             return false;
                         } else if (ret == 10001) {
                             retryCount++;
-                            if (!isInRetryPeriod) {
-                                isInRetryPeriod = true;
-                                retryStartTime = System.currentTimeMillis();
-                            }
-    
-                            long currentTime = System.currentTimeMillis();
-                            long elapsedTime = currentTime - retryStartTime;
-    
-                            if (elapsedTime < MAX_RETRY_TIME) {
-                                logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
-                                Thread.sleep(RETRY_INTERVAL);
-                                continue;
-                            } else {
-                                logger.severe("下载失败，超过最大重试时间");
+                            if (retryCount > 3) { // 重试次数超过 3 次
+                                logger.severe("下载失败，超过最大重试次数");
                                 Finance.FreeMediaData(mediaData);
                                 logAggregator.logFailureCategory("下载超时", sdkfileid);
                                 saveFailedRecordsToCSV("下载超时", sdkfileid, ret);
                                 return false;
                             }
+                            logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
+                            Thread.sleep(retryInterval);
+                            retryInterval *= 2; // 每次重试间隔翻倍
+                            continue;
                         } else {
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
                             logAggregator.logApiErrorCode(ret);
@@ -661,11 +644,6 @@ public class FetchData {
                             saveFailedRecordsToCSV("API 错误", sdkfileid, ret);
                             return false;
                         }
-                    }
-    
-                    if (isInRetryPeriod) {
-                        isInRetryPeriod = false;
-                        retryStartTime = 0;
                     }
     
                     fileOutputStream.write(Finance.GetData(mediaData));
