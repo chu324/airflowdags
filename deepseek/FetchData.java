@@ -503,7 +503,7 @@ public class FetchData {
             reader.readLine();
             // 统计 CSV 文件的总行数
             totalMediaFiles = (int) reader.lines().count();
-            logger.info("media_files.csv 文件的总行数: " + totalMediaFiles);
+            logAggregator.setTotalMediaFiles(totalMediaFiles);
         } catch (IOException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
             logAggregator.setTotalMediaFiles(0);
