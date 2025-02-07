@@ -38,7 +38,6 @@ public class SchedulerSetup {
     }
 
     public static void main(String[] args) throws SchedulerException, InterruptedException {
-
         // 创建调度器
         Scheduler scheduler = StdSchedulerFactory.getDefaultScheduler();
 
