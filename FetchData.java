@@ -659,6 +659,9 @@ public class FetchData {
                                 Finance.FreeMediaData(mediaData);
                                 logAggregator.logFailureCategory("下载超时", sdkfileid);
                                 saveFailedRecordsToCSV("下载超时", sdkfileid, ret);
+                                // 将失败任务添加到持久化队列
+                                CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
+                                queueManager.addTask(sdkfileid, msgtype);
                                 return false;
                             }
                             logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
@@ -671,6 +674,9 @@ public class FetchData {
                             Finance.FreeMediaData(mediaData);
                             logAggregator.logFailureCategory("API 错误", sdkfileid);
                             saveFailedRecordsToCSV("API 错误", sdkfileid, ret);
+                            // 将失败任务添加到持久化队列
+                            CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
+                            queueManager.addTask(sdkfileid, msgtype);
                             return false;
                         }
                     }
@@ -701,11 +707,17 @@ public class FetchData {
             logger.severe("文件操作失败: " + e.getMessage());
             logAggregator.logFailureCategory("文件操作失败", sdkfileid);
             saveFailedRecordsToCSV("文件操作失败", sdkfileid, -1);
+            // 将失败任务添加到持久化队列
+            CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
+            queueManager.addTask(sdkfileid, msgtype);
             return false;
         } catch (Exception e) {
             logger.severe("未知异常: " + e.getMessage());
             logAggregator.logFailureCategory("未知异常", sdkfileid);
             saveFailedRecordsToCSV("未知异常", sdkfileid, -1);
+            // 将失败任务添加到持久化队列
+            CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
+            queueManager.addTask(sdkfileid, msgtype);
             return false;
         } finally {
             if (tempFile != null && tempFile.exists()) {
