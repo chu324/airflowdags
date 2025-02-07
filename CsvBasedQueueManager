@@ -17,8 +17,16 @@ public class CsvBasedQueueManager {
     public void addTask(String sdkfileid, String msgtype) {
         lock.lock();
         try {
+            // 确保 `log` 目录存在
+            Path logDir = Paths.get("log");
+            if (!Files.exists(logDir)) {
+                Files.createDirectories(logDir); // 创建目录
+            }
+    
+            // 生成日志行
             String line = sdkfileid + "," + msgtype + ",1," + Instant.now().toString() + ",pending";
-            Files.write(Paths.get(QUEUE_FILE), (line + "\n").getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            Files.write(Paths.get(QUEUE_FILE), (line + "\n").getBytes(),
+                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException e) {
             e.printStackTrace();
         } finally {
