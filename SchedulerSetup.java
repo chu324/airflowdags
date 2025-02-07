@@ -16,18 +16,19 @@ public class SchedulerSetup {
     static {
         try {
             // 配置日志记录
-            String logDir = "logs/"; // 修改为相对路径
+            String logDir = "logs/"; 
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
             ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
             String dateStr = now.format(formatter);
             String logPath = logDir + dateStr + "/scheduler.log";
 
-            // 确保目录存在
+            // 创建文件夹（如果不存在）
             java.io.File logDirFile = new java.io.File(logDir);
             if (!logDirFile.exists()) {
-                logDirFile.mkdirs(); // 创建目录
+                logDirFile.mkdirs();
             }
 
+            // 配置日志文件
             FileHandler fileHandler = new FileHandler(logPath, true);
             fileHandler.setFormatter(new SimpleFormatter());
             Logger.getLogger("com.tencent.wework").addHandler(fileHandler);
@@ -49,7 +50,7 @@ public class SchedulerSetup {
         // 定义触发器（北京时间2025年1月17日上午11点执行）
         Trigger trigger = TriggerBuilder.newTrigger()
                 .withIdentity("fetchDataTrigger", "group1")
-                .withSchedule(CronScheduleBuilder.cronSchedule("0 02 15 * * ?")) // 2025年1月17日上午11点执行
+                .withSchedule(CronScheduleBuilder.cronSchedule("0 02 15 * * ?")) 
                 .build();
 
         // 绑定任务和触发器
@@ -59,7 +60,7 @@ public class SchedulerSetup {
         scheduler.start();
         logger.info("调度器已启动");
 
-        // 让主线程保持运行
+        // 确保主线程保持运行
         Thread.sleep(Long.MAX_VALUE);
     }
 }
