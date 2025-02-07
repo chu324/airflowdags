@@ -1,0 +1,81 @@
+package com.tencent.wework;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.locks.ReentrantLock;
+
+public class CsvBasedQueueManager {
+    private static final String QUEUE_FILE = "log/retry_queue.csv";
+    private static final ReentrantLock lock = new ReentrantLock();
+
+    public void addTask(String sdkfileid, String msgtype) {
+        lock.lock();
+        try {
+            String line = sdkfileid + "," + msgtype + ",1," + Instant.now().toString() + ",pending";
+            Files.write(Paths.get(QUEUE_FILE), (line + "\n").getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public List<String[]> getTasks(int batchSize) {
+        lock.lock();
+        try {
+            List<String[]> tasks = new ArrayList<>();
+            List<String> lines = Files.readAllLines(Paths.get(QUEUE_FILE));
+            Collections.shuffle(lines); // 随机顺序，避免饥饿问题
+            for (String line : lines.subList(0, Math.min(batchSize, lines.size()))) {
+                tasks.add(line.split(","));
+            }
+            return tasks;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return Collections.emptyList();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void updateTask(String sdkfileid, int retryCount, Instant lastRetryTime, String status) {
+        lock.lock();
+        try {
+            List<String> lines = Files.readAllLines(Paths.get(QUEUE_FILE));
+            List<String> updatedLines = new ArrayList<>();
+            for (String line : lines) {
+                String[] parts = line.split(",");
+                if (parts[0].equals(sdkfileid)) {
+                    parts[2] = String.valueOf(retryCount);
+                    parts[3] = lastRetryTime.toString();
+                    parts[4] = status;
+                }
+                updatedLines.add(String.join(",", parts));
+            }
+            Files.write(Paths.get(QUEUE_FILE), updatedLines, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void deleteTask(String sdkfileid) {
+        lock.lock();
+        try {
+            List<String> lines = Files.readAllLines(Paths.get(QUEUE_FILE));
+            lines.removeIf(line -> line.split(",")[0].equals(sdkfileid));
+            Files.write(Paths.get(QUEUE_FILE), lines, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }
+}
