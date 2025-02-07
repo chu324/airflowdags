@@ -1,13 +1,20 @@
 package com.tencent.wework;
 
+import java.time.ZonedDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.logging.Logger;
+import java.util.logging.Level;
 
 public class LogAggregator {
+    private static final Logger logger = Logger.getLogger(LogAggregator.class.getName());
+
     private final AtomicInteger totalMediaFiles = new AtomicInteger(0);
     private final AtomicInteger successCount = new AtomicInteger(0);
     private final AtomicInteger failureCount = new AtomicInteger(0);
@@ -55,24 +62,43 @@ public class LogAggregator {
     }
 
     public void logStatistics() {
-        System.out.println("定时任务触发，正在输出统计信息...");
-        System.out.println(String.format("[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d",
-                totalMediaFiles.get(), successCount.get(), failureCount.get(), expiredCount.get()));
+        // 获取当前北京时间
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        String timestamp = now.format(formatter);
 
-        System.out.println(String.format("失败文件总数=%d", failedRecordsCount.get()));
+        // 输出统计信息
+        logger.info(String.format(
+            "[%s] 定时任务触发，正在输出统计信息...\n" +
+            "[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d\n" +
+            "失败文件总数=%d",
+            timestamp, 
+            totalMediaFiles.get(), 
+            successCount.get(), 
+            failureCount.get(), 
+            expiredCount.get(),
+            failedRecordsCount.get()
+        ));
 
         if (!failureCategories.isEmpty()) {
-            System.out.println("失败分类统计:");
+            logger.info(String.format("失败分类统计 (北京时间：%s):", timestamp));
             for (Map.Entry<String, AtomicInteger> entry : failureCategories.entrySet()) {
-                System.out.println("- " + entry.getKey() + ": " + entry.getValue().get());
+                logger.info(String.format("- %s: %d", entry.getKey(), entry.getValue().get()));
             }
         }
 
         // 输出 API 错误码统计（排除 10001）
-        if (!apiErrorCodesMap.isEmpty()) {
-            System.out.println("API 错误码统计（非 10001）:");
-            for (Map.Entry<Integer, AtomicInteger> entry : apiErrorCodesMap.entrySet()) {
-                System.out.println("- ret=" + entry.getKey() + ": " + entry.getValue().get());
+        Map<Integer, AtomicInteger> filteredApiErrorCodes = new HashMap<>();
+        for (Map.Entry<Integer, AtomicInteger> entry : apiErrorCodesMap.entrySet()) {
+            if (entry.getKey() != 10001) {
+                filteredApiErrorCodes.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        if (!filteredApiErrorCodes.isEmpty()) {
+            logger.info("API 错误码统计（非 10001）:");
+            for (Map.Entry<Integer, AtomicInteger> entry : filteredApiErrorCodes.entrySet()) {
+                logger.info(String.format("- ret=%d: %d", entry.getKey(), entry.getValue().get()));
             }
         }
     }
