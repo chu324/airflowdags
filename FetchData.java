@@ -81,7 +81,14 @@ public class FetchData {
         // 阶段 2: 解密数据并保存到 curated 文件
         boolean decryptSuccess = decryptAndSaveToCurated(sdk);
         if (!decryptSuccess) {
-            logger.warning("解密并保存到 curated 文件失败，但仍将继续下载媒体文件");
+            logger.warning("解密并保存到 curated 文件失败");
+        }
+        
+        // 生成 media_files.csv 文件
+        String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
+        boolean mediaFilesGenerated = generateMediaFilesCSV(curatedFilePath, mediaFilesPath);
+        if (!mediaFilesGenerated) {
+            logger.severe("生成 media_files.csv 文件失败");
         }
     
         // 阶段 3: 下载媒体文件到 S3
@@ -236,50 +243,36 @@ public class FetchData {
         int successCount = 0; // 解密成功的条数
         int failureCount = 0; // 解密失败的条数
         List<String> failureDetails = new ArrayList<>(); // 存储解密失败的详细信息
-
-        // 定义 media_files.csv 文件路径
-        String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
-
-        // 使用 Set 去重
-        Set<String> processedSdkFileIds = new HashSet<>();
-
+    
         try (BufferedReader rawReader = new BufferedReader(new FileReader(rawFilePath));
-             BufferedWriter curatedWriter = new BufferedWriter(new FileWriter(curatedFilePath, true));
-             BufferedWriter mediaWriter = new BufferedWriter(new FileWriter(mediaFilesPath, true))) {
-
+             BufferedWriter curatedWriter = new BufferedWriter(new FileWriter(curatedFilePath, true))) {
+    
             // 如果是首次写入，添加表头
             if (new File(curatedFilePath).length() == 0) {
                 String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,raw_json";
                 curatedWriter.write(header);
                 curatedWriter.newLine();
             }
-
-            // 如果是首次写入 media_files.csv，添加表头
-            if (new File(mediaFilesPath).length() == 0) {
-                String mediaHeader = "msgtype,sdkfileid";
-                mediaWriter.write(mediaHeader);
-                mediaWriter.newLine();
-            }
-
+    
             String line;
             while ((line = rawReader.readLine()) != null) {
                 totalCount++; // 统计总数据条数
-
+    
                 JsonNode rootNode = objectMapper.readTree(line);
                 JsonNode chatDataNode = rootNode.path("chatdata");
-
+    
                 if (chatDataNode.isMissingNode() || !chatDataNode.isArray()) {
                     logger.severe("chatdata 字段缺失或格式错误");
                     failureCount++; // 统计解密失败的条数
                     continue;
                 }
-
+    
                 for (JsonNode chatData : chatDataNode) {
                     String seqStr = chatData.path("seq").asText();
                     String msgid = chatData.path("msgid").asText();
                     String encryptRandomKey = chatData.path("encrypt_random_key").asText();
                     String encryptChatMsg = chatData.path("encrypt_chat_msg").asText();
-
+    
                     // 解密数据
                     String decryptedMsg = decryptData(sdk, encryptRandomKey, encryptChatMsg);
                     if (decryptedMsg == null) {
@@ -287,12 +280,12 @@ public class FetchData {
                         failureDetails.add("seq=" + seqStr + ", msgid=" + msgid); // 记录解密失败的详细信息
                         continue;
                     }
-
+    
+                    successCount++; // 统计解密成功的条数
+    
                     // 转义控制字符
                     String escapedDecryptedMsg = escapeControlCharacters(decryptedMsg);
-
-                    successCount++; // 统计解密成功的条数
-
+    
                     // 解析解密后的消息
                     JsonNode decryptedRootNode = objectMapper.readTree(escapedDecryptedMsg);
                     String action = decryptedRootNode.path("action").asText();
@@ -301,36 +294,23 @@ public class FetchData {
                     String roomid = decryptedRootNode.path("roomid").asText();
                     long msgtime = decryptedRootNode.path("msgtime").asLong();
                     String msgtype = decryptedRootNode.path("msgtype").asText();
-
+    
                     // 提取 sdkfileid
                     String sdkfileid = extractSeqFileId(decryptedRootNode, msgtype);
-                    if (sdkfileid == null || sdkfileid.isEmpty()) {
-                        sdkfileid = ""; // 如果 sdkfileid 为空，设置为空字符串
-                    }
-
-                    // 如果 msgtype 是媒体文件类型，并且 sdkfileid 未被处理过，写入 media_files.csv
-                    Set<String> validMsgTypes = new HashSet<>(Arrays.asList(
-                        "image", "voice", "video", "emotion", "file", "meeting_voice_call", "voip_doc_share"
-                    ));
-                    if (validMsgTypes.contains(msgtype) && !sdkfileid.isEmpty() && !processedSdkFileIds.contains(sdkfileid)) {
-                        mediaWriter.write(msgtype + "," + sdkfileid);
-                        mediaWriter.newLine();
-                        processedSdkFileIds.add(sdkfileid); // 标记为已处理
-                    }
-
+    
                     // 提取 msgtype 对应的值作为 raw_json
                     JsonNode rawJsonNode = decryptedRootNode.path(msgtype);
                     String rawJson = rawJsonNode.toString();
-
+    
                     // 将 UTC 时间戳转换为北京时间
                     Instant instant = Instant.ofEpochMilli(msgtime);
                     ZonedDateTime beijingTime = instant.atZone(ZoneId.of("Asia/Shanghai"));
                     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
                     String beijingTimeStr = beijingTime.format(formatter);
-
+    
                     // 对 rawJson 字段进行转义并用双引号包裹
                     String escapedRawJson = escapeCsvField(rawJson);
-
+    
                     // 写入 curated 文件
                     if (tolistNode.isArray()) {
                         for (JsonNode to : tolistNode) {
@@ -349,21 +329,83 @@ public class FetchData {
             logger.severe("解密并保存到 curated 文件失败: " + e.getMessage());
             return false;
         }
-
+    
         // 输出总结日志
         logger.info(String.format(
             "解密完成: 总数据条数=%d, 成功=%d, 失败=%d",
             totalCount, successCount, failureCount
         ));
-
+    
         // 输出解密失败的详细信息
         if (!failureDetails.isEmpty()) {
             logger.info("解密失败的数据: " + String.join("; ", failureDetails));
         }
-
+    
         logger.info("解密并保存到 curated 文件完成: " + curatedFilePath);
-        logger.info("媒体文件信息已保存到: " + mediaFilesPath);
         return true;
+    }
+
+    public static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
+        Set<String> processedSdkFileIds = new HashSet<>();
+        try (BufferedReader chatReader = new BufferedReader(new FileReader(chatFilePath));
+             BufferedWriter mediaWriter = new BufferedWriter(new FileWriter(mediaFilesPath))) {
+    
+            // 如果是首次写入，添加表头
+            if (new File(mediaFilesPath).length() == 0) {
+                String mediaHeader = "msgtype,sdkfileid";
+                mediaWriter.write(mediaHeader);
+                mediaWriter.newLine();
+            }
+    
+            String line;
+            while ((line = chatReader.readLine()) != null) {
+                // 跳过表头和空行
+                if (line.startsWith("seq") || line.trim().isEmpty()) {
+                    continue;
+                }
+    
+                String[] fields = line.split(",");
+                if (fields.length < 9) {
+                    logger.warning("chat.csv 格式不正确，跳过行: " + line);
+                    continue;
+                }
+    
+                String msgtype = fields[7];
+                String sdkfileid = fields[8];
+    
+                // 检查消息类型是否为媒体类型
+                Set<String> validMsgTypes = new HashSet<>(Arrays.asList(
+                    "image", "voice", "video", "emotion", "file", "meeting_voice_call", "voip_doc_share"
+                ));
+                if (!validMsgTypes.contains(msgtype)) {
+                    continue;
+                }
+    
+                // 检查 sdkfileid 是否为空或不合法
+                if (sdkfileid == null || sdkfileid.isEmpty() || !isValidSDKFileId(sdkfileid)) {
+                    logger.info("sdkfileid 不合法或为空: msgtype=" + msgtype + ", sdkfileid=" + sdkfileid);
+                    continue;
+                }
+    
+                // 去重
+                if (!processedSdkFileIds.contains(sdkfileid)) {
+                    mediaWriter.write(msgtype + "," + sdkfileid);
+                    mediaWriter.newLine();
+                    processedSdkFileIds.add(sdkfileid);
+                }
+            }
+        } catch (IOException e) {
+            logger.severe("生成 media_files.csv 时发生错误: " + e.getMessage());
+            return false;
+        }
+    
+        return true;
+    }
+    
+    private static boolean isValidSDKFileId(String sdkfileid) {
+        // 添加 sdkfileid 的验证逻辑，例如检查格式、长度等
+        // 这里仅检查空字符串，可以根据实际需求扩展
+        return !sdkfileid.isEmpty();
     }
 
     private static String decryptData(long sdk, String encryptRandomKey, String encryptChatMsg) {
