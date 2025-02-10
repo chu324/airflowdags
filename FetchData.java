@@ -51,6 +51,133 @@ public class FetchData {
     // 声明 logAggregator 为静态变量
     private static final LogAggregator logAggregator = new LogAggregator();
 
+    /**
+     * 获取企业微信的 access_token
+     *
+     * @param corpid     企业的 ID
+     * @param corpsecret 应用的凭证密钥
+     * @return access_token 字符串
+     */
+    private static String getAccessToken(String corpid, String corpsecret) {
+        // 缓存 access_token 和过期时间
+        private static String accessToken;
+        private static long tokenExpiresTime;
+    
+        if (accessToken != null && tokenExpiresTime > System.currentTimeMillis()) {
+            // 如果 token 仍然有效，则直接返回
+            return accessToken;
+        }
+    
+        String url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=" + corpid + "&corpsecret=" + corpsecret;
+    
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .build();
+    
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    
+            if (response.statusCode() == 200) {
+                JsonNode rootNode = objectMapper.readTree(response.body());
+                if (rootNode.has("errcode") && rootNode.path("errcode").asInt() == 0) {
+                    accessToken = rootNode.path("access_token").asText();
+                    // 记录 token 的过期时间（当前时间 + expires_in - 60 秒缓冲）
+                    tokenExpiresTime = System.currentTimeMillis() + rootNode.path("expires_in").asLong() * 1000 - 60 * 1000;
+                    return accessToken;
+                } else {
+                    logger.severe("获取 access_token 失败，错误码：" + rootNode.path("errcode").asInt() + "，错误信息：" + rootNode.path("errmsg").asText());
+                }
+            } else {
+                logger.severe("HTTP 请求失败，状态码：" + response.statusCode());
+            }
+        } catch (Exception e) {
+            logger.severe("获取 access_token 异常：" + e.getMessage());
+        }
+    
+        return null;
+    }
+
+    /**
+     * 根据 external_userid 获取 unionid
+     *
+     * @param externalUserId 外部联系人 ID
+     * @return unionid 字符串
+     */
+    private static String getUnionIdByExternalUserId(String externalUserId) {
+        String corpid = "YOUR_CORPID"; // 替换为您的企业 ID
+        String corpsecret = "YOUR_CORPSECRET"; // 替换为您的应用凭证密钥
+    
+        String accessToken = getAccessToken(corpid, corpsecret);
+        if (accessToken == null) {
+            logger.severe("获取 access_token 失败");
+            return null;
+        }
+    
+        String apiUrl = "https://qyapi.weixin.qq.com/cgi-bin/externalcontact/get?access_token=" + accessToken + "&external_userid=" + externalUserId;
+    
+        try {
+            HttpResponse<String> response = HttpClient.newCall(apiUrl).execute();
+            if (response.isSuccessful()) {
+                JsonNode rootNode = objectMapper.readTree(response.body());
+                if (rootNode.has("errcode") && rootNode.path("errcode").asInt() == 0) {
+                    return rootNode.path("external_contact").path("unionid").asText();
+                } else {
+                    logger.severe("API 调用失败，错误码：" + rootNode.path("errcode").asInt() + "，错误信息：" + rootNode.path("errmsg").asText());
+                    return null;
+                }
+            } else {
+                logger.severe("HTTP 请求失败，状态码：" + response.code());
+                return null;
+            }
+        } catch (Exception e) {
+            logger.severe("获取 unionid 失败：" + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 生成 userid_mapping_yyyymmdd.csv 文件
+     *
+     * @param chatFilePath      chat_yyyymmdd.csv 文件路径
+     * @param mappingFilePath   userid_mapping_yyyymmdd.csv 文件路径
+     */
+    private static void generateUserIdMappingFile(String chatFilePath, String mappingFilePath) {
+        Set<String> externalUserIds = new HashSet<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(chatFilePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith("seq")) continue; // 跳过表头
+                String[] fields = line.split(",");
+                String sender = fields[3];
+                String receiver = fields[4];
+                if ((sender.startsWith("wo") || sender.startsWith("wm")) && !sender.startsWith("wb")) {
+                    externalUserIds.add(sender);
+                }
+                if ((receiver.startsWith("wo") || receiver.startsWith("wm")) && !receiver.startsWith("wb")) {
+                    externalUserIds.add(receiver);
+                }
+            }
+        } catch (IOException e) {
+            logger.severe("读取 chat 文件失败：" + e.getMessage());
+            return;
+        }
+    
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(mappingFilePath))) {
+            writer.write("external_userid,unionid");
+            writer.newLine();
+            for (String externalUserId : externalUserIds) {
+                String unionId = getUnionIdByExternalUserId(externalUserId);
+                if (unionId != null) {
+                    writer.write(externalUserId + "," + unionId);
+                    writer.newLine();
+                }
+            }
+        } catch (IOException e) {
+            logger.severe("写入 userid_mapping 文件失败：" + e.getMessage());
+        }
+    }
+
     public static boolean fetchNewData(long sdk) {
         // 设置任务日期
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -83,13 +210,17 @@ public class FetchData {
         if (!decryptSuccess) {
             logger.warning("解密并保存到 curated 文件失败");
         }
-        
+    
         // 生成 media_files.csv 文件
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         boolean mediaFilesGenerated = generateMediaFilesCSV(curatedFilePath, mediaFilesPath);
         if (!mediaFilesGenerated) {
             logger.severe("生成 media_files.csv 文件失败");
         }
+    
+        // 生成 userid_mapping_yyyymmdd.csv 文件
+        String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+        generateUserIdMappingFile(curatedFilePath, mappingFilePath);
     
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
@@ -104,7 +235,7 @@ public class FetchData {
     
         return true;
     }
-
+    
     private static boolean fetchData(long sdk) {
         int limit = 100; // 每次拉取的数据量
         int lastSeq = SeqHistoryUtil.loadLastSeq(); // 从 seq history log 中加载上次拉取的 seqid
@@ -820,7 +951,7 @@ public class FetchData {
         try {
             // 压缩并上传 raw 文件
             String rawZipFilePath = compressFile(rawFilePath, "wecom_chat_" + taskDateStr + "_raw.zip");
-            String rawS3Key = "home/wecom/inbound/c360/chat/archival/" + taskDateStr + "/wecom_chat_" + taskDateStr + "_raw.zip";
+            String rawS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/wecom_chat_" + taskDateStr + "_raw.zip";
             logger.info("开始上传 raw 文件到 S3: " + rawS3Key);
             uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
             logger.info("raw 文件上传完成: " + rawS3Key);
@@ -831,6 +962,16 @@ public class FetchData {
             logger.info("开始上传 curated 文件到 S3: " + curatedS3Key);
             uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
+    
+            // 生成 userid_mapping_yyyymmdd.csv 文件的路径
+            String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+    
+            // 压缩 userid_mapping_yyyymmdd.csv 文件
+            String mappingZipFilePath = compressFile(mappingFilePath, "userid_mapping_" + taskDateStr + ".zip");
+            String mappingS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/userid_mapping_" + taskDateStr + ".zip";
+            logger.info("开始上传 userid_mapping 文件到 S3: " + mappingS3Key);
+            uploadFileToS3(mappingZipFilePath, s3BucketName, mappingS3Key);
+            logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
     
             // 上传 failed_records 文件到 S3
             String failedRecordsFilePath = curatedFilePath.replace("chat_", "failed_records_");
