@@ -110,8 +110,8 @@ public class FetchData {
      * @return unionid 字符串
      */
     private static String getUnionIdByExternalUserId(String externalUserId) {
-        String corpid = "wx1b5619d5190a04e4"; // 替换为您的企业 ID
-        String corpsecret = "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs"; // 替换为您的应用凭证密钥
+        String corpid = "wx1b5619d5190a04e4";
+        String corpsecret = "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs";
     
         String accessToken = getAccessToken(corpid, corpsecret);
         if (accessToken == null) {
@@ -122,8 +122,14 @@ public class FetchData {
         String apiUrl = "https://qyapi.weixin.qq.com/cgi-bin/externalcontact/get?access_token=" + accessToken + "&external_userid=" + externalUserId;
     
         try {
-            HttpResponse<String> response = HttpClient.newCall(apiUrl).execute();
-            if (response.isSuccessful()) {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .build();
+    
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    
+            if (response.statusCode() == 200) { // Check status code instead of isSuccessful
                 JsonNode rootNode = objectMapper.readTree(response.body());
                 if (rootNode.has("errcode") && rootNode.path("errcode").asInt() == 0) {
                     return rootNode.path("external_contact").path("unionid").asText();
@@ -132,7 +138,7 @@ public class FetchData {
                     return null;
                 }
             } else {
-                logger.severe("HTTP 请求失败，状态码：" + response.code());
+                logger.severe("HTTP 请求失败，状态码：" + response.statusCode());
                 return null;
             }
         } catch (Exception e) {
