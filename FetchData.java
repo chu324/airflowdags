@@ -29,6 +29,10 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.Logger;
 import java.util.logging.Level;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.URI;
 
 public class FetchData {
     private static final Logger logger = Logger.getLogger(FetchData.class.getName());
@@ -51,6 +55,10 @@ public class FetchData {
     // 声明 logAggregator 为静态变量
     private static final LogAggregator logAggregator = new LogAggregator();
 
+    // 缓存 access_token 和过期时间
+    private static String accessToken;
+    private static long tokenExpiresTime;
+
     /**
      * 获取企业微信的 access_token
      *
@@ -59,9 +67,6 @@ public class FetchData {
      * @return access_token 字符串
      */
     private static String getAccessToken(String corpid, String corpsecret) {
-        // 缓存 access_token 和过期时间
-        private static String accessToken;
-        private static long tokenExpiresTime;
     
         if (accessToken != null && tokenExpiresTime > System.currentTimeMillis()) {
             // 如果 token 仍然有效，则直接返回
@@ -105,8 +110,8 @@ public class FetchData {
      * @return unionid 字符串
      */
     private static String getUnionIdByExternalUserId(String externalUserId) {
-        String corpid = "YOUR_CORPID"; // 替换为您的企业 ID
-        String corpsecret = "YOUR_CORPSECRET"; // 替换为您的应用凭证密钥
+        String corpid = "wx1b5619d5190a04e4"; // 替换为您的企业 ID
+        String corpsecret = "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs"; // 替换为您的应用凭证密钥
     
         String accessToken = getAccessToken(corpid, corpsecret);
         if (accessToken == null) {
