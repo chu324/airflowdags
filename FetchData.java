@@ -822,70 +822,68 @@ public class FetchData {
         boolean isFinished = false;
     
         File tempFile = null;
-        try {
-            tempFile = File.createTempFile("media_", ".tmp");
-            try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
-                int retryCount = 0;
-                long retryInterval = 500; // 初始重试间隔为 500ms
-                while (!isFinished) {
-                    long mediaData = Finance.NewMediaData();
+        tempFile = File.createTempFile("media_", ".tmp");
+        try (FileOutputStream fileOutputStream = new FileOutputStream(tempFile)) {
+            int retryCount = 0;
+            long retryInterval = 500; // 初始重试间隔为 500ms
+            while (!isFinished) {
+                long mediaData = Finance.NewMediaData();
     
-                    // 调用 SDK 获取媒体数据
-                    int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
+                // 调用 SDK 获取媒体数据
+                int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
     
-                    if (ret != 0) { // 如果发生错误
-                        if (ret == 10010) {
-                            logger.info("SDK 返回 10010，跳过下载");
-                            Finance.FreeMediaData(mediaData);
-                            updateDownloadStatus(sdkfileid, "false", "SDK 返回 10010");
-                            return false;
-                        } else if (ret == 10001) { // 网络波动错误，需要重试
-                            retryCount++;
-                            logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
-                            Thread.sleep(retryInterval); // 暂停一段时间后重试
-                            retryInterval *= 2; // 每次重试间隔翻倍
-                            if (retryInterval > 30000) { // 最大重试间隔为 30 秒
-                                retryInterval = 30000;
-                            }
-                            continue; // 继续重试
-                        } else { // 其他错误
-                            logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
-                            Finance.FreeMediaData(mediaData);
-                            updateDownloadStatus(sdkfileid, "false", "GetMediaData 失败，ret=" + ret);
-                            return false;
+                if (ret != 0) { // 如果发生错误
+                    if (ret == 10010) {
+                        logger.info("SDK 返回 10010，跳过下载");
+                        Finance.FreeMediaData(mediaData);
+                        updateDownloadStatus(sdkfileid, "false", "SDK 返回 10010");
+                        return false;
+                    } else if (ret == 10001) { // 网络波动错误，需要重试
+                        retryCount++;
+                        logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
+                        Thread.sleep(retryInterval); // 暂停一段时间后重试
+                        retryInterval *= 2; // 每次重试间隔翻倍
+                        if (retryInterval > 30000) { // 最大重试间隔为 30 秒
+                            retryInterval = 30000;
                         }
+                        continue; // 继续重试
+                    } else { // 其他错误
+                        logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
+                        Finance.FreeMediaData(mediaData);
+                        updateDownloadStatus(sdkfileid, "false", "GetMediaData 失败，ret=" + ret);
+                        return false;
                     }
-    
-                    // 写入媒体数据到临时文件
-                    fileOutputStream.write(Finance.GetData(mediaData));
-                    isFinished = Finance.IsMediaDataFinish(mediaData) == 1; // 检查是否完成
-                    if (!isFinished) {
-                        indexbuf = Finance.GetOutIndexBuf(mediaData); // 获取新的索引
-                    }
-                    Finance.FreeMediaData(mediaData);
                 }
     
-                // 生成 S3 存储路径
-                String s3Key = getMediaS3Key(msgtype, sdkfileid);
+                // 写入媒体数据到临时文件
+                fileOutputStream.write(Finance.GetData(mediaData));
+                isFinished = Finance.IsMediaDataFinish(mediaData) == 1; // 检查是否完成
+                if (!isFinished) {
+                    indexbuf = Finance.GetOutIndexBuf(mediaData); // 获取新的索引
+                }
+                Finance.FreeMediaData(mediaData);
+            }
     
-                // 上传文件到 S3 存储桶
-                uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-                updateDownloadStatus(sdkfileid, "true", "下载成功");
-                return true;
+            // 生成 S3 存储路径
+            String s3Key = getMediaS3Key(msgtype, sdkfileid);
     
-            } catch (IOException e) {
-                logger.severe("文件操作失败: " + e.getMessage());
-                updateDownloadStatus(sdkfileid, "false", "文件操作失败");
-                return false;
-            } catch (Exception e) {
-                logger.severe("未知异常: " + e.getMessage());
-                updateDownloadStatus(sdkfileid, "false", "未知异常");
-                return false;
-            } finally {
-                if (tempFile != null && tempFile.exists()) {
-                    if (!tempFile.delete()) {
-                        logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
-                    }
+            // 上传文件到 S3 存储桶
+            uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+            updateDownloadStatus(sdkfileid, "true", "下载成功");
+            return true;
+    
+        } catch (IOException e) {
+            logger.severe("文件操作失败: " + e.getMessage());
+            updateDownloadStatus(sdkfileid, "false", "文件操作失败");
+            return false;
+        } catch (Exception e) {
+            logger.severe("未知异常: " + e.getMessage());
+            updateDownloadStatus(sdkfileid, "false", "未知异常");
+            return false;
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                if (!tempFile.delete()) {
+                    logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
                 }
             }
         }
