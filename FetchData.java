@@ -814,6 +814,7 @@ public class FetchData {
     private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype) {
         if (sdkfileid == null || sdkfileid.isEmpty()) {
             logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
+            updateDownloadStatus(sdkfileid, "false", "sdkfileid 为空");
             return false;
         }
     
@@ -829,86 +830,107 @@ public class FetchData {
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
     
+                    // 调用 SDK 获取媒体数据
                     int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
     
-                    if (ret != 0) {
+                    if (ret != 0) { // 如果发生错误
                         if (ret == 10010) {
                             logger.info("SDK 返回 10010，跳过下载");
                             Finance.FreeMediaData(mediaData);
+                            updateDownloadStatus(sdkfileid, "false", "SDK 返回 10010");
                             return false;
-                        } else if (ret == 10001) {
+                        } else if (ret == 10001) { // 网络波动错误，需要重试
                             retryCount++;
-                            if (retryCount > 3) { // 重试次数超过 3 次
-                                logger.severe("下载失败，超过最大重试次数");
-                                Finance.FreeMediaData(mediaData);
-                                logAggregator.logFailureCategory("下载超时", sdkfileid);
-                                saveFailedRecordsToCSV("下载超时", sdkfileid, ret);
-                                // 将失败任务添加到持久化队列
-                                CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
-                                queueManager.addTask(sdkfileid, msgtype);
-                                return false;
-                            }
                             logger.warning("SDK 返回 10001，正在重试，重试次数: " + retryCount);
-                            Thread.sleep(retryInterval);
+                            Thread.sleep(retryInterval); // 暂停一段时间后重试
                             retryInterval *= 2; // 每次重试间隔翻倍
-                            continue;
-                        } else {
+                            if (retryInterval > 30000) { // 最大重试间隔为 30 秒
+                                retryInterval = 30000;
+                            }
+                            continue; // 继续重试
+                        } else { // 其他错误
                             logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
-                            logAggregator.logApiErrorCode(ret);
                             Finance.FreeMediaData(mediaData);
-                            logAggregator.logFailureCategory("API 错误", sdkfileid);
-                            saveFailedRecordsToCSV("API 错误", sdkfileid, ret);
-                            // 将失败任务添加到持久化队列
-                            CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
-                            queueManager.addTask(sdkfileid, msgtype);
+                            updateDownloadStatus(sdkfileid, "false", "GetMediaData 失败，ret=" + ret);
                             return false;
                         }
                     }
     
+                    // 写入媒体数据到临时文件
                     fileOutputStream.write(Finance.GetData(mediaData));
-                    isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
+                    isFinished = Finance.IsMediaDataFinish(mediaData) == 1; // 检查是否完成
                     if (!isFinished) {
-                        indexbuf = Finance.GetOutIndexBuf(mediaData);
+                        indexbuf = Finance.GetOutIndexBuf(mediaData); // 获取新的索引
                     }
                     Finance.FreeMediaData(mediaData);
                 }
-            }
     
-            String s3Key;
-            if ("unknown".equals(msgtype)) {
-                s3Key = String.format("raw/wecom_chat/media/unknown/%s.%s",
-                        sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
-            } else {
-                s3Key = String.format("raw/wecom_chat/media/%s/%s.%s",
-                        msgtype, sdkfileid, getFileExtension(getOriginalFileName(sdkfileid, msgtype)));
-            }
+                // 生成 S3 存储路径
+                String s3Key = getMediaS3Key(msgtype, sdkfileid);
     
-            uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-            logAggregator.incrementSuccessCount();
-            return true;
+                // 上传文件到 S3 存储桶
+                uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+                updateDownloadStatus(sdkfileid, "true", "下载成功");
+                return true;
     
-        } catch (IOException e) {
-            logger.severe("文件操作失败: " + e.getMessage());
-            logAggregator.logFailureCategory("文件操作失败", sdkfileid);
-            saveFailedRecordsToCSV("文件操作失败", sdkfileid, -1);
-            // 将失败任务添加到持久化队列
-            CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
-            queueManager.addTask(sdkfileid, msgtype);
-            return false;
-        } catch (Exception e) {
-            logger.severe("未知异常: " + e.getMessage());
-            logAggregator.logFailureCategory("未知异常", sdkfileid);
-            saveFailedRecordsToCSV("未知异常", sdkfileid, -1);
-            // 将失败任务添加到持久化队列
-            CsvBasedQueueManager queueManager = new CsvBasedQueueManager();
-            queueManager.addTask(sdkfileid, msgtype);
-            return false;
-        } finally {
-            if (tempFile != null && tempFile.exists()) {
-                if (!tempFile.delete()) {
-                    logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
+            } catch (IOException e) {
+                logger.severe("文件操作失败: " + e.getMessage());
+                updateDownloadStatus(sdkfileid, "false", "文件操作失败");
+                return false;
+            } catch (Exception e) {
+                logger.severe("未知异常: " + e.getMessage());
+                updateDownloadStatus(sdkfileid, "false", "未知异常");
+                return false;
+            } finally {
+                if (tempFile != null && tempFile.exists()) {
+                    if (!tempFile.delete()) {
+                        logger.warning("临时文件删除失败: " + tempFile.getAbsolutePath());
+                    }
                 }
             }
+        }
+    }
+
+    private static void updateDownloadStatus(String sdkfileid, String status, String comment) {
+        File tempFile = new File("data/download_task/meta_media_download.csv.tmp");
+    
+        try (BufferedReader reader = new BufferedReader(new FileReader("data/download_task/meta_media_download.csv"));
+             BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
+    
+            String line;
+            boolean found = false;
+    
+            while ((line = reader.readLine()) != null) {
+                String[] fields = line.split(",");
+                if (fields.length >= 2 && fields[1].equals(sdkfileid)) {
+                    found = true;
+                    fields[2] = status;
+                    fields[3] = comment;
+                    writer.write(StringUtils.join(fields, ","));
+                } else {
+                    writer.write(line);
+                }
+                writer.newLine();
+            }
+    
+            if (!found) {
+                writer.write(StringUtils.join(msgtype, sdkfileid, status, comment));
+            }
+    
+            Files.move(tempFile.toPath(), Paths.get("data/download_task/meta_media_download.csv"), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            logger.severe("更新下载状态失败: " + e.getMessage());
+        }
+    }
+
+    private static String getMediaS3Key(String msgtype, String sdkfileid) {
+        String originalFileName = getOriginalFileName(sdkfileid, msgtype);
+        String fileExtension = getFileExtension(originalFileName);
+    
+        if ("unknown".equals(msgtype)) {
+            return String.format("raw/wecom_chat/media/unknown/%s.%s", sdkfileid, fileExtension);
+        } else {
+            return String.format("raw/wecom_chat/media/%s/%s.%s", msgtype, sdkfileid, fileExtension);
         }
     }
 
