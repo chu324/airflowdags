@@ -229,9 +229,9 @@ public class FetchData {
             logger.severe("生成 media_files.csv 文件失败");
         }
     
-        // 生成 userid_mapping_yyyymmdd.csv 文件
-        String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
-        generateUserIdMappingFile(curatedFilePath, mappingFilePath);
+        // 生成 userid_mapping_yyyymmdd.csv 文件,保留后续使用
+        //String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+        //generateUserIdMappingFile(curatedFilePath, mappingFilePath);
     
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
