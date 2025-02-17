@@ -33,6 +33,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.URI;
+import org.apache.commons.lang3.StringUtils;
 
 public class FetchData {
     private static final Logger logger = Logger.getLogger(FetchData.class.getName());
