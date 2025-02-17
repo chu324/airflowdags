@@ -62,6 +62,9 @@ public class FetchData {
     private static String accessToken;
     private static long tokenExpiresTime;
 
+    private static final String STATUS_SUCCESS = "success";
+    private static final String STATUS_FAILED = "failed";
+
     /**
      * 获取企业微信的 access_token
      *
