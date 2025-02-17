@@ -19,6 +19,8 @@ import com.opencsv.CSVParserBuilder;
 import com.opencsv.exceptions.CsvValidationException;
 import java.io.*;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -815,7 +817,7 @@ public class FetchData {
     private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype) {
         if (sdkfileid == null || sdkfileid.isEmpty()) {
             logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
-            updateDownloadStatus(sdkfileid, "false", "sdkfileid 为空");
+            updateDownloadStatus(msgtype,sdkfileid, "false", "sdkfileid 为空");
             return false;
         }
     
@@ -837,7 +839,7 @@ public class FetchData {
                     if (ret == 10010) {
                         logger.info("SDK 返回 10010，跳过下载");
                         Finance.FreeMediaData(mediaData);
-                        updateDownloadStatus(sdkfileid, "false", "SDK 返回 10010");
+                        updateDownloadStatus(msgtype,sdkfileid, "false", "SDK 返回 10010");
                         return false;
                     } else if (ret == 10001) { // 网络波动错误，需要重试
                         retryCount++;
@@ -851,7 +853,7 @@ public class FetchData {
                     } else { // 其他错误
                         logger.severe("GetMediaData failed, ret: " + ret + ". 任务中断。");
                         Finance.FreeMediaData(mediaData);
-                        updateDownloadStatus(sdkfileid, "false", "GetMediaData 失败，ret=" + ret);
+                        updateDownloadStatus(msgtype,sdkfileid, "false", "GetMediaData 失败，ret=" + ret);
                         return false;
                     }
                 }
@@ -870,16 +872,16 @@ public class FetchData {
     
             // 上传文件到 S3 存储桶
             uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-            updateDownloadStatus(sdkfileid, "true", "下载成功");
+            updateDownloadStatus(msgtype,sdkfileid, "true", "下载成功");
             return true;
     
         } catch (IOException e) {
             logger.severe("文件操作失败: " + e.getMessage());
-            updateDownloadStatus(sdkfileid, "false", "文件操作失败");
+            updateDownloadStatus(msgtype,sdkfileid, "false", "文件操作失败");
             return false;
         } catch (Exception e) {
             logger.severe("未知异常: " + e.getMessage());
-            updateDownloadStatus(sdkfileid, "false", "未知异常");
+            updateDownloadStatus(msgtype,sdkfileid, "false", "未知异常");
             return false;
         } finally {
             if (tempFile != null && tempFile.exists()) {
@@ -890,7 +892,7 @@ public class FetchData {
         }
     }
 
-    private static void updateDownloadStatus(String sdkfileid, String status, String comment) {
+    private static void updateDownloadStatus(String msgtype,String sdkfileid, String status, String comment) {
         File tempFile = new File("data/download_task/meta_media_download.csv.tmp");
     
         try (BufferedReader reader = new BufferedReader(new FileReader("data/download_task/meta_media_download.csv"));
