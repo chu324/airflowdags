@@ -11,6 +11,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Logger;
 import java.util.logging.Level;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
 
 public class LogAggregator {
     private static final Logger logger = Logger.getLogger(LogAggregator.class.getName());
@@ -27,6 +30,13 @@ public class LogAggregator {
 
     // 记录 API 返回的特定错误码
     private final Map<Integer, AtomicInteger> apiErrorCodesMap = new HashMap<>();
+
+    // media_files.csv 文件路径
+    private String mediaFilesPath;
+
+    public LogAggregator(String mediaFilesPath) {
+        this.mediaFilesPath = mediaFilesPath;
+    }
 
     public void incrementTotalMediaFiles() {
         totalMediaFiles.incrementAndGet();
@@ -57,49 +67,82 @@ public class LogAggregator {
         apiErrorCodesMap.computeIfAbsent(retCode, k -> new AtomicInteger(0)).incrementAndGet();
     }
 
-    public void setTotalMediaFiles(int total) {
-        this.totalMediaFiles.set(total);
+    /**
+     * 输出统计信息
+     */
+    public void logStatistics() {
+        try {
+            // 获取当前北京时间
+            ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            String timestamp = now.format(formatter);
+
+            // 动态获取 media_files.csv 中的总文件数
+            int totalFiles = getFileCountFromCSV();
+
+            // 输出统计信息
+            logger.info(String.format(
+                "[%s] 定时任务触发，正在输出统计信息...\n" +
+                "[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d\n" +
+                "失败文件总数=%d",
+                timestamp, 
+                totalFiles, 
+                successCount.get(), 
+                failureCount.get(), 
+                expiredCount.get(),
+                failedRecordsCount.get()
+            ));
+
+            if (!failureCategories.isEmpty()) {
+                logger.info(String.format("失败分类统计 (北京时间：%s):", timestamp));
+                for (Map.Entry<String, AtomicInteger> entry : failureCategories.entrySet()) {
+                    logger.info(String.format("- %s: %d", entry.getKey(), entry.getValue().get()));
+                }
+            }
+
+            // 输出 API 错误码统计（排除 10001）
+            Map<Integer, AtomicInteger> filteredApiErrorCodes = new HashMap<>();
+            for (Map.Entry<Integer, AtomicInteger> entry : apiErrorCodesMap.entrySet()) {
+                if (entry.getKey() != 10001) {
+                    filteredApiErrorCodes.put(entry.getKey(), entry.getValue());
+                }
+            }
+
+            if (!filteredApiErrorCodes.isEmpty()) {
+                logger.info("API 错误码统计（非 10001）:");
+                for (Map.Entry<Integer, AtomicInteger> entry : filteredApiErrorCodes.entrySet()) {
+                    logger.info(String.format("- ret=%d: %d", entry.getKey(), entry.getValue().get()));
+                }
+            }
+        } catch (Exception e) {
+            logger.severe("输出统计信息时发生错误：" + e.getMessage());
+        }
     }
 
-    public void logStatistics() {
-        // 获取当前北京时间
-        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        String timestamp = now.format(formatter);
-
-        // 输出统计信息
-        logger.info(String.format(
-            "[%s] 定时任务触发，正在输出统计信息...\n" +
-            "[媒体文件下载统计] 总文件数=%d, 成功=%d, 失败=%d, 过期=%d\n" +
-            "失败文件总数=%d",
-            timestamp, 
-            totalMediaFiles.get(), 
-            successCount.get(), 
-            failureCount.get(), 
-            expiredCount.get(),
-            failedRecordsCount.get()
-        ));
-
-        if (!failureCategories.isEmpty()) {
-            logger.info(String.format("失败分类统计 (北京时间：%s):", timestamp));
-            for (Map.Entry<String, AtomicInteger> entry : failureCategories.entrySet()) {
-                logger.info(String.format("- %s: %d", entry.getKey(), entry.getValue().get()));
-            }
+    /**
+     * 从 media_files.csv 文件中获取总文件数
+     * @return 文件总数
+     */
+    private int getFileCountFromCSV() {
+        int count = 0;
+        if (mediaFilesPath == null) {
+            logger.severe("media_files.csv 文件路径未提供");
+            return 0;
         }
 
-        // 输出 API 错误码统计（排除 10001）
-        Map<Integer, AtomicInteger> filteredApiErrorCodes = new HashMap<>();
-        for (Map.Entry<Integer, AtomicInteger> entry : apiErrorCodesMap.entrySet()) {
-            if (entry.getKey() != 10001) {
-                filteredApiErrorCodes.put(entry.getKey(), entry.getValue());
+        try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath))) {
+            String line;
+            boolean isHeader = true;
+            while ((line = reader.readLine()) != null) {
+                if (isHeader) {
+                    isHeader = false;
+                    continue;
+                }
+                count++;
             }
+        } catch (IOException e) {
+            logger.severe("读取 media_files.csv 文件时发生错误: " + e.getMessage());
         }
-
-        if (!filteredApiErrorCodes.isEmpty()) {
-            logger.info("API 错误码统计（非 10001）:");
-            for (Map.Entry<Integer, AtomicInteger> entry : filteredApiErrorCodes.entrySet()) {
-                logger.info(String.format("- ret=%d: %d", entry.getKey(), entry.getValue().get()));
-            }
-        }
+        return count;
     }
 }
