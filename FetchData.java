@@ -682,7 +682,7 @@ public class FetchData {
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             logAggregator.logStatistics();
-        }, 0, 10, TimeUnit.MINUTES);
+        }, 0, 1, TimeUnit.MINUTES);
         
         // 初始化下载任务线程池 A 和 B
         ExecutorService executorServiceA = Executors.newFixedThreadPool(10); // 线程池 A 的并发度为 10
@@ -783,7 +783,6 @@ public class FetchData {
         FileOutputStream fileOutputStream = null;
     
         try {
-            logger.info(String.format("开始下载媒体文件 (sdkfileid=%s, msgtype=%s)", sdkfileid, msgtype));
             tempFile = File.createTempFile("media_", ".tmp");
             fileOutputStream = new FileOutputStream(tempFile);
     
@@ -885,10 +884,10 @@ public class FetchData {
         File tempFile = new File(mediaFilesPath + ".tmp");
         try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath));
              BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-    
+            
             String line;
             boolean updated = false;
-    
+            
             while ((line = reader.readLine()) != null) {
                 String[] fields = line.split(",");
                 if (fields.length >= 2 && fields[1].equals(sdkfileid)) {
@@ -900,16 +899,22 @@ public class FetchData {
                 }
                 writer.newLine();
             }
-    
+            
             if (!updated) {
                 writer.write(String.format("unknown,%s,%s,%s", sdkfileid, newStatus, newComment));
             }
-    
+            
             writer.flush();
             Files.move(tempFile.toPath(), new File(mediaFilesPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
-    
+            
+        } catch (AtomicMoveNotSupportedException e) {
+            logger.severe("移动临时文件时发生错误: " + e.getMessage());
         } catch (IOException e) {
-            logger.severe("更新 media_files.csv 文件状态失败: " + e.getMessage());
+            logger.severe("更新媒体文件状态时发生错误: " + e.getMessage() + ", 文件路径: " + mediaFilesPath + ", sdkfileid: " + sdkfileid);
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
         }
     }
 
