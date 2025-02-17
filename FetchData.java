@@ -954,7 +954,29 @@ public class FetchData {
     
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
-                updateDownloadStatus(msgtype, sdkfileid, "false", "初始状态");
+    
+                // 检查 meta_media_download.csv 中是否已存在该 sdkfileid
+                boolean exists = false;
+                try (BufferedReader reader = new BufferedReader(new FileReader(metaFile))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        String[] metaFields = line.split(",");
+                        if (metaFields.length >= 2 && metaFields[1].equals(sdkfileid)) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                } catch (IOException e) {
+                    logger.severe("读取 meta_media_download.csv 文件失败: " + e.getMessage());
+                }
+    
+                if (exists) {
+                    // 如果记录已存在，跳过更新 status 和 comment 字段
+                    continue;
+                } else {
+                    // 插入新记录，初始 status 为 false
+                    updateDownloadStatus(msgtype, sdkfileid, "false", "初始状态");
+                }
             }
         } catch (IOException | CsvValidationException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
