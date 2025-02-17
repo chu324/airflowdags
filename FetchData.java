@@ -867,43 +867,44 @@ public class FetchData {
             return;
         }
     
-        // 检查元数据文件是否存在
+        // 如果元数据文件不存在，初始化它
         if (!metaFile.exists()) {
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(metaFile))) {
-                writer.write("msgtype,sdkfileid,status,comment");
+                writer.write("msgtype,sdkfileid,status,comment\n");
             } catch (IOException e) {
                 logger.severe("创建元数据文件失败: " + e.getMessage());
                 return;
             }
         }
     
-        // 使用临时文件更新状态
-        try (BufferedReader reader = new BufferedReader(new FileReader(metaFile));
-             BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-    
+        // 读取现有记录
+        List<String> existingRecords = new ArrayList<>();
+        boolean recordExists = false;
+        try (BufferedReader reader = new BufferedReader(new FileReader(metaFile))) {
             String line;
-            boolean found = false;
-    
             while ((line = reader.readLine()) != null) {
-                String[] fields = line.split(",");
-                if (fields.length >= 2 && fields[1].equals(sdkfileid)) {
-                    found = true;
-                    // 更新 status 和 comment
-                    writer.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, status, comment));
-                } else {
-                    writer.write(line);
+                existingRecords.add(line);
+                if (line.startsWith(sdkfileid)) { // 示例判断逻辑，可根据实际需求调整
+                    recordExists = true;
                 }
-                writer.newLine();
             }
+        } catch (IOException e) {
+            logger.severe("读取 meta_media_download.csv 文件失败: " + e.getMessage());
+            return;
+        }
     
-            if (!found) {
-                // 如果记录不存在，插入新记录
-                writer.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, status, comment));
-                writer.newLine();
+        // 更新或插入记录
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(metaFile))) {
+            for (String record : existingRecords) {
+                if (record.startsWith(sdkfileid)) {
+                    writer.write(String.format("%s,%s,%s,%s\n", msgtype, sdkfileid, status, comment));
+                } else {
+                    writer.write(record + "\n");
+                }
             }
-    
-            // 替换原文件为临时文件
-            Files.move(tempFile.toPath(), metaFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            if (!recordExists) {
+                writer.write(String.format("%s,%s,%s,%s\n", msgtype, sdkfileid, status, comment));
+            }
         } catch (IOException e) {
             logger.severe("更新下载状态失败: " + e.getMessage());
         }
