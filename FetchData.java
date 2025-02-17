@@ -672,42 +672,26 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("正在读取 media_files.csv 文件: " + mediaFilesPath);
     
-        // 初始化定时任务
+        // 1. 先初始 upsert media_files.csv 到 meta_media_download.csv
+        boolean upsertSuccess = upsertMediaFilesToMeta(mediaFilesPath);
+        if (!upsertSuccess) {
+            logger.severe("初始 upsert 失败，无法生成 meta_media_download.csv 文件！");
+            return false;
+        }
+    
+        // 2. 初始化定时任务
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             logAggregator.logStatistics();
         }, 0, 10, TimeUnit.MINUTES);
     
-        // 初始化线程池和相关变量
+        // 3. 初始化线程池和相关变量
         ExecutorService executorService = Executors.newFixedThreadPool(10); // 线程池大小限制为 10
         List<Future<?>> futures = new ArrayList<>();
         List<String> sdkfileids = new ArrayList<>();
         int totalMediaFiles = 0; // 用于统计 sdkfileid 的总行数
     
-        // 读取 CSV 文件的总行数
-        try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath))) {
-            // 跳过标题行
-            reader.readLine();
-            // 统计 CSV 文件的总行数
-            totalMediaFiles = (int) reader.lines().count();
-            logAggregator.setTotalMediaFiles(totalMediaFiles);
-        } catch (IOException e) {
-            logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
-            logAggregator.setTotalMediaFiles(0);
-            return false;
-        }
-    
-        // 如果文件为空或没有记录，设置总文件数为 0
-        if (totalMediaFiles == 0) {
-            logger.warning("media_files.csv 文件中没有记录！");
-            logAggregator.setTotalMediaFiles(0);
-            return false;
-        }
-    
-        // 设置总文件数
-        logAggregator.setTotalMediaFiles(totalMediaFiles);
-    
-        // 初始化 CSVReader
+        // 4. 读取 CSV 文件的总行数并设置下载任务
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -737,20 +721,19 @@ public class FetchData {
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
+                // 提交下载任务
                 futures.add(executorService.submit(() -> {
                     long taskSdk = Finance.NewSdk();
                     Finance.Init(taskSdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
                     try {
                         boolean fileDownloaded = downloadAndUploadMediaFile(taskSdk, sdkfileid, msgtype);
                         if (fileDownloaded) {
-                            logAggregator.incrementSuccessCount();
+                            updateDownloadStatus(msgtype, sdkfileid, "true", "下载成功");
                         } else {
-                            logAggregator.incrementFailureCount();
-                            logAggregator.logFailureCategory("下载失败", sdkfileid);
+                            updateDownloadStatus(msgtype, sdkfileid, "false", "下载失败");
                         }
                     } catch (Exception e) {
-                        logAggregator.incrementFailureCount();
-                        logAggregator.logFailureCategory("异常", sdkfileid);
+                        updateDownloadStatus(msgtype, sdkfileid, "false", "异常");
                     } finally {
                         Finance.DestroySdk(taskSdk);
                     }
@@ -760,38 +743,20 @@ public class FetchData {
     
             if (!hasRecords) {
                 logger.warning("media_files.csv 文件中没有记录！");
-                logAggregator.setTotalMediaFiles(0);
+                return false;
             }
     
         } catch (IOException | CsvValidationException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
-            logAggregator.setTotalMediaFiles(0);
             return false;
         }
     
-        // 等待所有任务完成
-        for (int i = 0; i < futures.size(); i++) {
-            Future<?> future = futures.get(i);
-            String sdkfileid = sdkfileids.get(i);
+        // 5. 等待所有下载任务完成
+        for (Future<?> future : futures) {
             try {
-                future.get(5, TimeUnit.MINUTES); // 每个任务超时时间为 5 分钟
-            } catch (TimeoutException e) {
-                logger.warning("任务超时，已取消: " + e.getMessage());
-                future.cancel(true);
-                logAggregator.incrementFailureCount();
-                logAggregator.logFailureCategory("任务超时", sdkfileid);
-                saveFailedRecordsToCSV("任务超时", sdkfileid, -1);
-            } catch (ExecutionException e) {
-                logger.severe("任务执行失败: " + e.getCause().getMessage());
-                logAggregator.incrementFailureCount();
-                logAggregator.logFailureCategory("任务执行失败", sdkfileid);
-                saveFailedRecordsToCSV("任务执行失败", sdkfileid, -1);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                logger.severe("线程被中断: " + e.getMessage());
-                logAggregator.incrementFailureCount();
-                logAggregator.logFailureCategory("线程中断", sdkfileid);
-                saveFailedRecordsToCSV("线程中断", sdkfileid, -1);
+                future.get(); // 等待任务完成
+            } catch (ExecutionException | InterruptedException e) {
+                logger.severe("下载任务执行失败: " + e.getCause().getMessage());
             }
         }
     
@@ -808,7 +773,6 @@ public class FetchData {
             scheduler.shutdownNow();
         }
     
-        logAggregator.logStatistics(); // 手动生成统计信息
         logger.info("所有媒体文件已处理完成");
     
         return allFilesDownloaded;
@@ -903,7 +867,7 @@ public class FetchData {
             return;
         }
     
-        // 检查 metaFile 是否存在
+        // 检查元数据文件是否存在
         if (!metaFile.exists()) {
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(metaFile))) {
                 writer.write("msgtype,sdkfileid,status,comment");
@@ -913,16 +877,7 @@ public class FetchData {
             }
         }
     
-        // 检查 tempFile 是否存在
-        if (!tempFile.exists()) {
-            try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-                writer.write("msgtype,sdkfileid,status,comment");
-            } catch (IOException e) {
-                logger.severe("创建临时元数据文件失败: " + e.getMessage());
-                return;
-            }
-        }
-    
+        // 使用临时文件更新状态
         try (BufferedReader reader = new BufferedReader(new FileReader(metaFile));
              BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
     
@@ -933,7 +888,8 @@ public class FetchData {
                 String[] fields = line.split(",");
                 if (fields.length >= 2 && fields[1].equals(sdkfileid)) {
                     found = true;
-                    writer.write(StringUtils.join(new String[]{msgtype, sdkfileid, status, comment}, ","));
+                    // 更新 status 和 comment
+                    writer.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, status, comment));
                 } else {
                     writer.write(line);
                 }
@@ -941,16 +897,71 @@ public class FetchData {
             }
     
             if (!found) {
-                writer.write(StringUtils.join(new String[]{msgtype, sdkfileid, status, comment}, ","));
+                // 如果记录不存在，插入新记录
+                writer.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, status, comment));
                 writer.newLine();
             }
     
             // 替换原文件为临时文件
             Files.move(tempFile.toPath(), metaFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-    
         } catch (IOException e) {
             logger.severe("更新下载状态失败: " + e.getMessage());
         }
+    }
+
+    private static boolean upsertMediaFilesToMeta(String mediaFilesPath) {
+        File downloadTaskDir = new File("data/download_task");
+        File metaFile = new File(downloadTaskDir, "meta_media_download.csv");
+        File tempFile = new File(downloadTaskDir, "meta_media_download.csv.tmp");
+    
+        // 检查并创建 download_task 目录
+        if (!downloadTaskDir.exists() && !downloadTaskDir.mkdirs()) {
+            logger.severe("无法创建 download_task 目录");
+            return false;
+        }
+    
+        // 初始化元数据文件
+        if (!metaFile.exists()) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(metaFile))) {
+                writer.write("msgtype,sdkfileid,status,comment");
+            } catch (IOException e) {
+                logger.severe("创建元数据文件失败: " + e.getMessage());
+                return false;
+            }
+        }
+    
+        // 读取 media_files.csv 的内容
+        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
+                .withCSVParser(new CSVParserBuilder()
+                        .withQuoteChar('"')
+                        .withEscapeChar('\\')
+                        .withIgnoreLeadingWhiteSpace(true)
+                        .build())
+                .build()) {
+            String[] fields;
+            boolean isHeader = true;
+    
+            while ((fields = csvReader.readNext()) != null) {
+                if (isHeader) {
+                    isHeader = false;
+                    continue;
+                }
+    
+                if (fields.length < 2) {
+                    logger.severe("CSV 行格式错误，字段不足: " + Arrays.toString(fields));
+                    continue;
+                }
+    
+                String msgtype = fields[0];
+                String sdkfileid = fields[1];
+                updateDownloadStatus(msgtype, sdkfileid, "false", "初始状态");
+            }
+        } catch (IOException | CsvValidationException e) {
+            logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
+            return false;
+        }
+    
+        return true;
     }
 
     private static String getMediaS3Key(String msgtype, String sdkfileid) {
