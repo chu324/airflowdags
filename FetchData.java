@@ -924,14 +924,32 @@ public class FetchData {
         // 初始化元数据文件
         if (!metaFile.exists()) {
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(metaFile))) {
-                writer.write("msgtype,sdkfileid,status,comment");
+                writer.write("msgtype,sdkfileid,status,comment\n");
             } catch (IOException e) {
                 logger.severe("创建元数据文件失败: " + e.getMessage());
                 return false;
             }
         }
     
-        // 读取 media_files.csv 的内容
+        // 读取 meta_media_download.csv 的内容到内存
+        Map<String, String[]> metaRecords = new LinkedHashMap<>();
+        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(metaFile))
+                .withCSVParser(new CSVParserBuilder()
+                        .withQuoteChar('"')
+                        .withEscapeChar('\\')
+                        .withIgnoreLeadingWhiteSpace(true)
+                        .build())
+                .build()) {
+            String[] line;
+            while ((line = csvReader.readNext()) != null) {
+                metaRecords.put(line[1], line); // 使用 sdkfileid 作为键
+            }
+        } catch (IOException | CsvValidationException e) {
+            logger.severe("读取 meta_media_download.csv 文件失败: " + e.getMessage());
+            return false;
+        }
+    
+        // 读取 media_files.csv 的内容并更新 metaRecords
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
                         .withQuoteChar('"')
@@ -956,31 +974,35 @@ public class FetchData {
                 String msgtype = fields[0];
                 String sdkfileid = fields[1];
     
-                // 检查 meta_media_download.csv 中是否已存在该 sdkfileid
-                boolean exists = false;
-                try (BufferedReader reader = new BufferedReader(new FileReader(metaFile))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        String[] metaFields = line.split(",");
-                        if (metaFields.length >= 2 && metaFields[1].equals(sdkfileid)) {
-                            exists = true;
-                            break;
-                        }
-                    }
-                } catch (IOException e) {
-                    logger.severe("读取 meta_media_download.csv 文件失败: " + e.getMessage());
-                }
-    
-                if (exists) {
-                    // 如果记录已存在，跳过更新 status 和 comment 字段
-                    continue;
-                } else {
-                    // 插入新记录，初始 status 为 false
-                    updateDownloadStatus(msgtype, sdkfileid, "false", "初始状态");
+                // 如果记录不存在，插入新记录
+                if (!metaRecords.containsKey(sdkfileid)) {
+                    metaRecords.put(sdkfileid, new String[]{
+                            msgtype,
+                            sdkfileid,
+                            "false",
+                            "初始状态"
+                    });
                 }
             }
         } catch (IOException | CsvValidationException e) {
             logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
+            return false;
+        }
+    
+        // 将更新后的 metaRecords 写回 meta_media_download.csv
+        try (CSVWriter csvWriter = new CSVWriterBuilder(new FileWriter(metaFile))
+                .withQuoteChar('"')
+                .withSeparator(',')
+                .build()) {
+            // 写入表头
+            csvWriter.writeNext(new String[]{"msgtype", "sdkfileid", "status", "comment"});
+    
+            // 写入记录
+            for (String[] record : metaRecords.values()) {
+                csvWriter.writeNext(record);
+            }
+        } catch (IOException e) {
+            logger.severe("写入 meta_media_download.csv 文件失败: " + e.getMessage());
             return false;
         }
     
