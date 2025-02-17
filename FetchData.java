@@ -56,7 +56,7 @@ public class FetchData {
     private static ScheduledExecutorService scheduler;
 
     // 声明 logAggregator 为静态变量
-    private static final LogAggregator logAggregator = new LogAggregator();
+    private static LogAggregator logAggregator;
 
     // 缓存 access_token 和过期时间
     private static String accessToken;
@@ -543,7 +543,8 @@ public class FetchData {
             logger.severe("生成 media_files.csv 时发生错误: " + e.getMessage());
             return false;
         }
-    
+        
+        logAggregator = new LogAggregator(mediaFilesPath);
         return true;
     }
 
@@ -677,11 +678,17 @@ public class FetchData {
         boolean allFilesDownloaded = true;
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("正在读取 media_files.csv 文件: " + mediaFilesPath);
-        
+
+        logAggregator = new LogAggregator(mediaFilesPath);
+
         // 初始化定时任务线程池 B
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
-            logAggregator.logStatistics();
+            if (logAggregator != null) {
+                logAggregator.logStatistics();
+            } else {
+                logger.severe("LogAggregator 未初始化");
+            }
         }, 0, 1, TimeUnit.MINUTES);
         
         // 初始化下载任务线程池 A 和 B
