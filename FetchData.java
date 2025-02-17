@@ -670,24 +670,30 @@ public class FetchData {
         return "\"" + escapedField + "\"";
     }
 
+    /**
+     * 下载媒体文件到 S3 存储桶
+     */
     private static boolean downloadMediaFilesToS3(long sdk) {
         boolean allFilesDownloaded = true;
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("正在读取 media_files.csv 文件: " + mediaFilesPath);
-    
+        
         // 初始化定时任务线程池 B
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
             logAggregator.logStatistics();
         }, 0, 10, TimeUnit.MINUTES);
-    
-        // 初始化下载任务线程池 A
+        
+        // 初始化下载任务线程池 A 和 B
         ExecutorService executorServiceA = Executors.newFixedThreadPool(10); // 线程池 A 的并发度为 10
         ExecutorService executorServiceB = Executors.newFixedThreadPool(3);  // 线程池 B 的并发度为 3
-    
+        
         List<Future<?>> futuresA = new ArrayList<>(); // 存储线程池 A 的任务
         List<Future<?>> futuresB = new ArrayList<>(); // 存储线程池 B 的任务
-        List<String> sdkFileIdsToProcess = new ArrayList<>();
+    
+        // 存储需要处理的 sdkFileIds 及其对应的 msgtype
+        Map<String, String> sdkFileIdsWithMsgType = new HashMap<>();
+        Set<String> sdkFileIdsToProcess = new HashSet<>();
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder()
@@ -710,10 +716,12 @@ public class FetchData {
                 }
     
                 String sdkfileid = fields[1];
+                String msgtype = fields[0];
                 String status = fields[2];
     
                 if ("in_progress".equalsIgnoreCase(status)) {
                     sdkFileIdsToProcess.add(sdkfileid);
+                    sdkFileIdsWithMsgType.put(sdkfileid, msgtype);
                 }
             }
         } catch (IOException | CsvValidationException e) {
@@ -723,9 +731,15 @@ public class FetchData {
     
         // 提交下载任务到线程池 A
         for (String sdkfileid : sdkFileIdsToProcess) {
+            String msgtype = sdkFileIdsWithMsgType.get(sdkfileid);
+            if (msgtype == null || msgtype.isEmpty()) {
+                logger.warning("无法获取 msgtype，跳过 sdkfileid: " + sdkfileid);
+                continue;
+            }
+    
             Future<?> future = executorServiceA.submit(() -> {
                 try {
-                    boolean success = downloadMediaFileWithRetry(sdk, sdkfileid, mediaFilesPath, executorServiceB);
+                    boolean success = downloadMediaFileWithRetry(sdk, sdkfileid, msgtype, mediaFilesPath, executorServiceB);
                     if (success) {
                         updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_SUCCESS, "");
                     } else {
@@ -762,15 +776,16 @@ public class FetchData {
         return allFilesDownloaded;
     }
 
-    private static boolean downloadMediaFileWithRetry(long sdk, String sdkfileid, String mediaFilesPath, ExecutorService executorServiceB) throws Exception {
-        String indexbuf = "";
+    private static boolean downloadMediaFileWithRetry(long sdk, String sdkfileid, String msgtype, String mediaFilesPath, ExecutorService executorServiceB) throws Exception {
+        String indexbuf = ""; // 当前索引缓冲
         boolean isFinished = false;
         File tempFile = null;
+        FileOutputStream fileOutputStream = null;
     
-        // 尝试第一次下载
         try {
+            logger.info(String.format("开始下载媒体文件 (sdkfileid=%s, msgtype=%s)", sdkfileid, msgtype));
             tempFile = File.createTempFile("media_", ".tmp");
-            FileOutputStream fileOutputStream = new FileOutputStream(tempFile);
+            fileOutputStream = new FileOutputStream(tempFile);
     
             while (!isFinished) {
                 long mediaData = Finance.NewMediaData();
@@ -785,10 +800,10 @@ public class FetchData {
                     }
                     Finance.FreeMediaData(mediaData);
                 } else if (ret == 10001) { // 网络波动错误，将任务提交到线程池 B
-                    logger.warning("网络波动，任务转移至线程池 B: " + sdkfileid);
+                    logger.warning("网络波动，任务提交至线程池 B");
                     Finance.FreeMediaData(mediaData);
-                    submitToThreadPoolB(sdk, sdkfileid, mediaFilesPath, executorServiceB, fileOutputStream, tempFile);
-                    return false; // 任务已提交到线程池 B，返回失败
+                    submitToThreadPoolB(sdk, sdkfileid, msgtype, mediaFilesPath, executorServiceB, fileOutputStream, tempFile);
+                    return false;
                 } else {
                     logger.severe("GetMediaData 错误，ret: " + ret);
                     Finance.FreeMediaData(mediaData);
@@ -797,50 +812,54 @@ public class FetchData {
             }
     
             // 上传文件到 S3 存储桶
-            String s3Key = getMediaS3Key(sdkfileid);
+            String s3Key = getMediaS3Key(msgtype, sdkfileid);
             uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-            tempFile.delete();
             return true;
     
         } catch (Exception e) {
             logger.severe("媒体文件下载失败: " + e.getMessage());
             return false;
         } finally {
+            if (fileOutputStream != null) {
+                fileOutputStream.close();
+            }
             if (tempFile != null && tempFile.exists()) {
                 tempFile.delete();
             }
         }
     }
 
-    private static void submitToThreadPoolB(long sdk, String sdkfileid, String mediaFilesPath, ExecutorService executorServiceB, FileOutputStream fileOutputStream, File tempFile) {
+    private static void submitToThreadPoolB(long sdk, String sdkfileid, String msgtype, String mediaFilesPath, ExecutorService executorServiceB, FileOutputStream fileOutputStream, File tempFile) {
         executorServiceB.submit(() -> {
+            String indexbuf = ""; // 当前索引缓冲
+            boolean isFinished = false;
+    
             try {
-                while (true) { // 持续重试
+                while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
                     int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
     
                     if (ret == 0) {
                         byte[] data = Finance.GetData(mediaData);
                         fileOutputStream.write(data);
-                        if (Finance.IsMediaDataFinish(mediaData) == 1) {
-                            break; // 下载完成
-                        } else {
+                        isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
+                        if (!isFinished) {
                             indexbuf = Finance.GetOutIndexBuf(mediaData);
                         }
                         Finance.FreeMediaData(mediaData);
-                    } else if (ret == 10001) {
-                        logger.warning("网络波动，继续重试: " + sdkfileid);
-                        Thread.sleep(1000); // 暂停 1 秒后重试
+                    } else if (ret == 10001) { // 网络波动错误，继续重试
+                        logger.warning("网络波动，任务再次提交至线程池 B");
+                        Thread.sleep(1000); // 1秒后重试
                         Finance.FreeMediaData(mediaData);
                     } else {
                         logger.severe("GetMediaData 错误，ret: " + ret);
                         Finance.FreeMediaData(mediaData);
-                        break; // 其他错误，停止重试
+                        break;
                     }
                 }
     
                 // 上传文件到 S3 存储桶
-                String s3Key = getMediaS3Key(sdkfileid);
+                String s3Key = getMediaS3Key(msgtype, sdkfileid);
                 uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
                 updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_SUCCESS, "");
     
@@ -848,6 +867,13 @@ public class FetchData {
                 logger.severe("线程池 B 下载任务失败: " + e.getMessage());
                 updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_FAILED, "网络波动重试失败");
             } finally {
+                try {
+                    if (fileOutputStream != null) {
+                        fileOutputStream.close();
+                    }
+                } catch (IOException e) {
+                    logger.warning("关闭 FileOutputStream 时发生错误: " + e.getMessage());
+                }
                 if (tempFile != null && tempFile.exists()) {
                     tempFile.delete();
                 }
