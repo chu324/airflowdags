@@ -892,10 +892,38 @@ public class FetchData {
         }
     }
 
-    private static void updateDownloadStatus(String msgtype,String sdkfileid, String status, String comment) {
-        File tempFile = new File("data/download_task/meta_media_download.csv.tmp");
+    private static void updateDownloadStatus(String msgtype, String sdkfileid, String status, String comment) {
+        File downloadTaskDir = new File("data/download_task");
+        File metaFile = new File(downloadTaskDir, "meta_media_download.csv");
+        File tempFile = new File(downloadTaskDir, "meta_media_download.csv.tmp");
     
-        try (BufferedReader reader = new BufferedReader(new FileReader("data/download_task/meta_media_download.csv"));
+        // 检查并创建 download_task 目录
+        if (!downloadTaskDir.exists() && !downloadTaskDir.mkdirs()) {
+            logger.severe("无法创建 download_task 目录");
+            return;
+        }
+    
+        // 检查 metaFile 是否存在
+        if (!metaFile.exists()) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(metaFile))) {
+                writer.write("msgtype,sdkfileid,status,comment");
+            } catch (IOException e) {
+                logger.severe("创建元数据文件失败: " + e.getMessage());
+                return;
+            }
+        }
+    
+        // 检查 tempFile 是否存在
+        if (!tempFile.exists()) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
+                writer.write("msgtype,sdkfileid,status,comment");
+            } catch (IOException e) {
+                logger.severe("创建临时元数据文件失败: " + e.getMessage());
+                return;
+            }
+        }
+    
+        try (BufferedReader reader = new BufferedReader(new FileReader(metaFile));
              BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
     
             String line;
@@ -905,9 +933,7 @@ public class FetchData {
                 String[] fields = line.split(",");
                 if (fields.length >= 2 && fields[1].equals(sdkfileid)) {
                     found = true;
-                    fields[2] = status;
-                    fields[3] = comment;
-                    writer.write(StringUtils.join(fields, ","));
+                    writer.write(StringUtils.join(new String[]{msgtype, sdkfileid, status, comment}, ","));
                 } else {
                     writer.write(line);
                 }
@@ -915,10 +941,13 @@ public class FetchData {
             }
     
             if (!found) {
-                writer.write(StringUtils.join(msgtype, sdkfileid, status, comment));
+                writer.write(StringUtils.join(new String[]{msgtype, sdkfileid, status, comment}, ","));
+                writer.newLine();
             }
     
-            Files.move(tempFile.toPath(), Paths.get("data/download_task/meta_media_download.csv"), StandardCopyOption.REPLACE_EXISTING);
+            // 替换原文件为临时文件
+            Files.move(tempFile.toPath(), metaFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+    
         } catch (IOException e) {
             logger.severe("更新下载状态失败: " + e.getMessage());
         }
