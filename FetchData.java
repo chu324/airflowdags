@@ -814,7 +814,7 @@ public class FetchData {
         return allFilesDownloaded;
     }
 
-    private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype) {
+    private static boolean downloadAndUploadMediaFile(long sdk, String sdkfileid, String msgtype) throws IOException {
         if (sdkfileid == null || sdkfileid.isEmpty()) {
             logger.info("sdkfileid 为空，跳过下载: msgtype=" + msgtype);
             updateDownloadStatus(msgtype,sdkfileid, "false", "sdkfileid 为空");
