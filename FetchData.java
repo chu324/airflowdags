@@ -913,9 +913,6 @@ public class FetchData {
             
             writer.flush();
             Files.move(tempFile.toPath(), new File(mediaFilesPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
-            
-        } catch (AtomicMoveNotSupportedException e) {
-            logger.severe("移动临时文件时发生错误: " + e.getMessage());
         } catch (IOException e) {
             logger.severe("更新媒体文件状态时发生错误: " + e.getMessage() + ", 文件路径: " + mediaFilesPath + ", sdkfileid: " + sdkfileid);
         } finally {
