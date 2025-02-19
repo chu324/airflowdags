@@ -498,16 +498,13 @@ public class FetchData {
         try (BufferedReader chatReader = new BufferedReader(new FileReader(chatFilePath));
              BufferedWriter mediaWriter = new BufferedWriter(new FileWriter(mediaFilesPath))) {
     
-            // 如果是首次写入，添加表头
             if (new File(mediaFilesPath).length() == 0) {
-                String mediaHeader = "msgtype,sdkfileid,status,comment";
-                mediaWriter.write(mediaHeader);
+                mediaWriter.write("msgtype,sdkfileid,status,comment");
                 mediaWriter.newLine();
             }
     
             String line;
             while ((line = chatReader.readLine()) != null) {
-                // 跳过表头和空行
                 if (line.startsWith("seq") || line.trim().isEmpty()) {
                     continue;
                 }
@@ -521,18 +518,15 @@ public class FetchData {
                 String msgtype = fields[7];
                 String sdkfileid = fields[8];
     
-                // 检查消息类型是否为媒体类型
                 if (!isValidMsgType(msgtype)) {
                     continue;
                 }
     
-                // 检查 sdkfileid 是否为空或不合法
                 if (!isValidSDKFileId(sdkfileid)) {
-                    logger.info("sdkfileid 不合法或为空: msgtype=" + msgtype + ", sdkfileid=" + sdkfileid);
+                    logger.warning("sdkfileid 不合法或为空: msgtype=" + msgtype + ", sdkfileid=" + sdkfileid);
                     continue;
                 }
     
-                // 去重
                 if (!processedSdkFileIds.contains(sdkfileid)) {
                     mediaWriter.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, "in_progress", ""));
                     mediaWriter.newLine();
@@ -544,13 +538,12 @@ public class FetchData {
             return false;
         }
         
-        logAggregator = new LogAggregator(mediaFilesPath);
         return true;
     }
 
     private static boolean isValidMsgType(String msgtype) {
         Set<String> validMsgTypes = new HashSet<>(Arrays.asList(
-            "image", "voice", "video", "emotion", "file", "meeting_voice_call", "voip_doc_share"
+            "image", "voice", "video", "emotion", "file"
         ));
         return validMsgTypes.contains(msgtype);
     }
@@ -892,14 +885,13 @@ public class FetchData {
         try (BufferedReader reader = new BufferedReader(new FileReader(mediaFilesPath));
              BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
             
-            String line;
             boolean updated = false;
-            
+            String line;
             while ((line = reader.readLine()) != null) {
-                String[] fields = line.split(",");
-                if (fields.length >= 2 && fields[1].equals(sdkfileid)) {
-                    String msgtype = fields[0];
-                    writer.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, newStatus, newComment));
+                String[] fields = line.split(",", -1);
+                if (fields.length >= 4 && fields[1].equals(sdkfileid)) {
+                    // 保持 msgtype 不变，只更新 status 和 comment
+                    writer.write(String.format("%s,%s,%s,%s", fields[0], sdkfileid, newStatus, newComment));
                     updated = true;
                 } else {
                     writer.write(line);
@@ -907,14 +899,10 @@ public class FetchData {
                 writer.newLine();
             }
             
-            if (!updated) {
-                writer.write(String.format("unknown,%s,%s,%s", sdkfileid, newStatus, newComment));
-            }
-            
             writer.flush();
             Files.move(tempFile.toPath(), new File(mediaFilesPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            logger.severe("更新媒体文件状态时发生错误: " + e.getMessage() + ", 文件路径: " + mediaFilesPath + ", sdkfileid: " + sdkfileid);
+            logger.severe("更新媒体文件状态时发生错误: " + e.getMessage());
         } finally {
             if (tempFile != null && tempFile.exists()) {
                 tempFile.delete();
