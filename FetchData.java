@@ -528,7 +528,7 @@ public class FetchData {
                 }
     
                 if (!processedSdkFileIds.contains(sdkfileid)) {
-                    mediaWriter.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, "in_progress", ""));
+                    mediaWriter.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, "tbd", ""));
                     mediaWriter.newLine();
                     processedSdkFileIds.add(sdkfileid);
                 }
@@ -671,9 +671,10 @@ public class FetchData {
         boolean allFilesDownloaded = true;
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("正在读取 media_files.csv 文件: " + mediaFilesPath);
-
+    
+        // 初始化日志聚合器
         logAggregator = new LogAggregator(mediaFilesPath);
-
+    
         // 初始化定时任务线程池 B
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         scheduler.scheduleAtFixedRate(() -> {
@@ -683,7 +684,7 @@ public class FetchData {
                 logger.severe("LogAggregator 未初始化");
             }
         }, 0, 1, TimeUnit.MINUTES);
-        
+    
         // 初始化下载任务线程池 A 和 B
         ExecutorService executorServiceA = Executors.newFixedThreadPool(10); // 线程池 A 的并发度为 10
         ExecutorService executorServiceB = Executors.newFixedThreadPool(3);  // 线程池 B 的并发度为 3
@@ -719,7 +720,16 @@ public class FetchData {
                 String msgtype = fields[0];
                 String status = fields[2];
     
-                if ("in_progress".equalsIgnoreCase(status)) {
+                if (!isValidMsgType(msgtype)) {
+                    continue;
+                }
+    
+                if (!isValidSDKFileId(sdkfileid)) {
+                    logger.warning("sdkfileid 不合法或为空: msgtype=" + msgtype + ", sdkfileid=" + sdkfileid);
+                    continue;
+                }
+    
+                if ("tbd".equalsIgnoreCase(status)) {
                     sdkFileIdsToProcess.add(sdkfileid);
                     sdkFileIdsWithMsgType.put(sdkfileid, msgtype);
                 }
@@ -740,11 +750,7 @@ public class FetchData {
             Future<?> future = executorServiceA.submit(() -> {
                 try {
                     boolean success = downloadMediaFileWithRetry(sdk, sdkfileid, msgtype, mediaFilesPath, executorServiceB);
-                    if (success) {
-                        updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_SUCCESS, "");
-                    } else {
-                        updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_FAILED, "下载失败，原因未知");
-                    }
+                    updateMediaFileStatus(mediaFilesPath, sdkfileid, success ? STATUS_SUCCESS : STATUS_FAILED, "");
                 } catch (Exception e) {
                     logger.severe("下载任务失败: " + e.getMessage());
                 }
@@ -833,6 +839,9 @@ public class FetchData {
             String indexbuf = ""; // 当前索引缓冲
             boolean isFinished = false;
     
+            // 更新状态为 in_queue
+            updateMediaFileStatus(mediaFilesPath, sdkfileid, "in_queue", "等待重试");
+    
             try {
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
@@ -848,8 +857,8 @@ public class FetchData {
                         Finance.FreeMediaData(mediaData);
                     } else if (ret == 10001) { // 网络波动错误，继续重试
                         logger.warning("网络波动，任务再次提交至线程池 B");
-                        Thread.sleep(1000); // 1秒后重试
                         Finance.FreeMediaData(mediaData);
+                        Thread.sleep(1000); // 1秒后重试
                     } else {
                         logger.severe("GetMediaData 错误，ret: " + ret);
                         Finance.FreeMediaData(mediaData);
@@ -860,11 +869,11 @@ public class FetchData {
                 // 上传文件到 S3 存储桶
                 String s3Key = getMediaS3Key(msgtype, sdkfileid);
                 uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-                updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_SUCCESS, "");
+                updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_SUCCESS, "线程池 B 下载成功");
     
             } catch (Exception e) {
                 logger.severe("线程池 B 下载任务失败: " + e.getMessage());
-                updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_FAILED, "网络波动重试失败");
+                updateMediaFileStatus(mediaFilesPath, sdkfileid, STATUS_FAILED, "线程池 B 下载失败");
             } finally {
                 try {
                     if (fileOutputStream != null) {
@@ -888,11 +897,12 @@ public class FetchData {
             boolean updated = false;
             String line;
             while ((line = reader.readLine()) != null) {
-                String[] fields = line.split(",", -1);
+                String[] fields = line.split(",", -1); // 使用 -1 保留空字段
                 if (fields.length >= 4 && fields[1].equals(sdkfileid)) {
-                    // 保持 msgtype 不变，只更新 status 和 comment
-                    writer.write(String.format("%s,%s,%s,%s", fields[0], sdkfileid, newStatus, newComment));
+                    String originalMsgtype = fields[0];
+                    writer.write(String.format("%s,%s,%s,%s", originalMsgtype, sdkfileid, newStatus, newComment));
                     updated = true;
+                    logger.info("更新媒体文件状态: sdkfileid=" + sdkfileid + ", newStatus=" + newStatus);
                 } else {
                     writer.write(line);
                 }
