@@ -13,14 +13,21 @@ import software.amazon.awssdk.services.sns.model.PublishResponse;
 import software.amazon.awssdk.services.sns.model.SnsException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencsv.CSVWriter;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
 import com.opencsv.CSVParserBuilder;
 import com.opencsv.exceptions.CsvValidationException;
 import java.io.*;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.Files;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.FileVisitResult;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.time.LocalDate;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -29,6 +36,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream; 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import java.util.logging.Level;
 import java.net.http.HttpClient;
@@ -64,6 +72,20 @@ public class FetchData {
 
     private static final String STATUS_SUCCESS = "success";
     private static final String STATUS_FAILED = "failed";
+
+    // 自定义异常类（作为静态内部类）
+    public static class SdkException extends Exception {
+        private final int statusCode;  // 错误码字段
+
+        public SdkException(int statusCode, String message) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+    }
 
     /**
      * 获取企业微信的 access_token
@@ -685,7 +707,7 @@ public class FetchData {
                         // 注意：这里使用md5sum作为唯一标识参数
                         int ret = Finance.GetMediaData(sdk, indexbuf, md5sum, null, null, 10, mediaData);
                         if (ret != 0) {
-                            throw new SdkException(ret, "GetMediaData failed");
+                            throw new SdkException(ret, "GetMediaData failed, ret=" + ret);
                         }
     
                         byte[] data = Finance.GetData(mediaData);
@@ -1094,15 +1116,15 @@ public class FetchData {
             Files.walkFileTree(directory.toPath(), new SimpleFileVisitor<Path>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Files.delete(file); // 删除文件
+                    Files.delete(file);
                     logger.fine("已删除文件: " + file);
                     return FileVisitResult.CONTINUE;
                 }
-    
+            
                 @Override
                 public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                    if (!dir.equals(directory.toPath())) { // 保留根目录
-                        Files.delete(dir); // 删除空目录
+                    if (!dir.equals(directory.toPath())) {
+                        Files.delete(dir);
                         logger.info("已删除目录: " + dir);
                     }
                     return FileVisitResult.CONTINUE;
