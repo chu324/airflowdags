@@ -808,7 +808,7 @@ public class FetchData {
                                 successCount.incrementAndGet();
                                 logger.info("媒体文件下载成功: md5sum=" + md5sum);
                             } catch (SdkException e) {
-                                if (e.statusCode() == 10001 && retryCount < MAX_RETRIES) {
+                                if (e.getStatusCode() == 10001 && retryCount < MAX_RETRIES) {
                                     retryCount++;
                                     logger.warning(String.format(
                                         "网络波动重试中 (md5sum=%s, 尝试次数 %d/%d)",
