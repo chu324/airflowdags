@@ -728,7 +728,7 @@ public class FetchData {
             logger.info("媒体文件下载成功: md5sum=" + md5sum);
         } catch (SdkException e) {
             logger.severe("SDK操作失败: " + e.getMessage());
-            saveFailedRecordsToCSV("SDK_ERROR", md5sum, e.statusCode());
+            saveFailedRecordsToCSV("SDK_ERROR", md5sum, e.getStatusCode());
         } catch (Exception e) {
             logger.severe("下载媒体文件失败: " + e.getMessage());
             saveFailedRecordsToCSV("SYSTEM_ERROR", md5sum, -1);
