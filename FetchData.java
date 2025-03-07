@@ -1064,14 +1064,14 @@ public class FetchData {
             logger.info("curated 文件上传完成: " + curatedS3Key);
     
             // 生成 userid_mapping_yyyymmdd.csv 文件的路径
-            String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+            // String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
     
             // 压缩 userid_mapping_yyyymmdd.csv 文件
-            String mappingZipFilePath = compressFile(mappingFilePath, "userid_mapping_" + taskDateStr + ".zip");
-            String mappingS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/userid_mapping_" + taskDateStr + ".zip";
-            logger.info("开始上传 userid_mapping 文件到 S3: " + mappingS3Key);
-            uploadFileToS3(mappingZipFilePath, s3BucketName, mappingS3Key);
-            logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
+            // String mappingZipFilePath = compressFile(mappingFilePath, "userid_mapping_" + taskDateStr + ".zip");
+            // String mappingS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/userid_mapping_" + taskDateStr + ".zip";
+            // logger.info("开始上传 userid_mapping 文件到 S3: " + mappingS3Key);
+            // uploadFileToS3(mappingZipFilePath, s3BucketName, mappingS3Key);
+            // logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
     
             // 上传 failed_records 文件到 S3
             String failedRecordsFilePath = curatedFilePath.replace("chat_", "failed_records_");
