@@ -531,24 +531,22 @@ public class FetchData {
     
             String[] record;
             while ((record = csvReader.readNext()) != null) {
-                // 越界保护
                 if (record.length < REQUIRED_COLUMNS) {
                     logger.warning("检测到不完整记录，跳过处理。实际列数: " + record.length);
                     continue;
                 }
     
-                String msgtype = record[7];
-                String md5sum = record[9];
+                String msgtype = record[7].trim();
+                String md5sum = record[9].trim();
     
                 // 空值检查
-                if (StringUtils.isBlank(msgtype) || StringUtils.isBlank(md5sum)) {
-                    logger.warning("检测到空值记录，msgtype: " + msgtype + ", md5sum: " + md5sum);
+                if (!isValidMsgType(msgtype)) {
+                    logger.fine("跳过非媒体类型: " + msgtype);
                     continue;
                 }
-    
-                // 有效性检查
-                if (!isValidMsgType(msgtype)) {
-                    logger.fine("跳过无效消息类型: " + msgtype);
+
+                if (StringUtils.isBlank(md5sum)) {
+                    logger.warning("媒体类型记录缺少 md5sum: " + msgtype);
                     continue;
                 }
     
@@ -558,11 +556,8 @@ public class FetchData {
                 }
             }
             return true;
-        } catch (IOException | CsvValidationException e) {
-            logger.severe("生成媒体文件清单失败: " + e.getMessage());
-            return false;
         } catch (Exception e) {
-            logger.severe("未预期的错误: " + e.getMessage());
+            logger.severe("生成媒体文件清单失败: " + e.getMessage());
             return false;
         }
     }
@@ -781,9 +776,14 @@ public class FetchData {
     
                 String msgtype = record[0].trim();
                 String md5sum = record[1].trim();
+
+                if (!isValidMsgType(msgtype)) {
+                    logger.fine("跳过非媒体类型: " + msgtype);
+                    continue;
+                }
     
-                if (!isValidMsgType(msgtype) || StringUtils.isBlank(md5sum)) {
-                    logger.warning("跳过无效记录 - msgtype: " + msgtype + ", md5sum: " + md5sum);
+                if (StringUtils.isBlank(md5sum)) {
+                    logger.warning("媒体类型记录缺少 md5sum: " + msgtype);
                     continue;
                 }
     
