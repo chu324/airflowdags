@@ -387,31 +387,29 @@ public class FetchData {
     }
 
     private static boolean decryptAndSaveToCurated(long sdk) {
-        int totalCount = 0; // 总数据条数
-        int successCount = 0; // 解密成功的条数
-        int failureCount = 0; // 解密失败的条数
-        List<String> failureDetails = new ArrayList<>(); // 存储解密失败的详细信息
+        int totalCount = 0;
+        int successCount = 0;
+        int failureCount = 0;
+        List<String> failureDetails = new ArrayList<>();
     
         try (BufferedReader rawReader = new BufferedReader(new FileReader(rawFilePath));
              BufferedWriter curatedWriter = new BufferedWriter(new FileWriter(curatedFilePath, true))) {
     
-            // 如果是首次写入，添加表头
+            // 添加表头（新增 md5sum 列）
             if (new File(curatedFilePath).length() == 0) {
-                String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,raw_json";
+                String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,raw_json";
                 curatedWriter.write(header);
                 curatedWriter.newLine();
             }
     
             String line;
             while ((line = rawReader.readLine()) != null) {
-                totalCount++; // 统计总数据条数
-    
+                totalCount++;
                 JsonNode rootNode = objectMapper.readTree(line);
                 JsonNode chatDataNode = rootNode.path("chatdata");
     
                 if (chatDataNode.isMissingNode() || !chatDataNode.isArray()) {
-                    logger.severe("chatdata 字段缺失或格式错误");
-                    failureCount++; // 统计解密失败的条数
+                    failureCount++;
                     continue;
                 }
     
@@ -421,85 +419,76 @@ public class FetchData {
                     String encryptRandomKey = chatData.path("encrypt_random_key").asText();
                     String encryptChatMsg = chatData.path("encrypt_chat_msg").asText();
     
-                    // 解密数据
                     String decryptedMsg = decryptData(sdk, encryptRandomKey, encryptChatMsg);
                     if (decryptedMsg == null) {
-                        failureCount++; // 统计解密失败的条数
-                        failureDetails.add("seq=" + seqStr + ", msgid=" + msgid); // 记录解密失败的详细信息
+                        failureCount++;
+                        failureDetails.add("seq=" + seqStr + ", msgid=" + msgid);
                         continue;
                     }
     
-                    successCount++; // 统计解密成功的条数
-    
-                    // 转义控制字符
+                    successCount++;
                     String escapedDecryptedMsg = escapeControlCharacters(decryptedMsg);
-    
-                    // 解析解密后的消息
                     JsonNode decryptedRootNode = objectMapper.readTree(escapedDecryptedMsg);
+    
                     String action = decryptedRootNode.path("action").asText();
                     String sender = decryptedRootNode.path("from").asText();
                     JsonNode tolistNode = decryptedRootNode.path("tolist");
                     String roomid = decryptedRootNode.path("roomid").asText();
                     long msgtime = decryptedRootNode.path("msgtime").asLong();
                     String msgtype = decryptedRootNode.path("msgtype").asText();
-    
-                    // 提取 sdkfileid
                     String sdkfileid = extractSeqFileId(decryptedRootNode, msgtype);
+                    String md5sum = extractMd5Sum(decryptedRootNode, msgtype); // 新增 md5sum 提取
     
-                    // 提取 msgtype 对应的值作为 raw_json
                     JsonNode rawJsonNode = decryptedRootNode.path(msgtype);
                     String rawJson = rawJsonNode.toString();
     
-                    // 将 UTC 时间戳转换为北京时间
                     Instant instant = Instant.ofEpochMilli(msgtime);
                     ZonedDateTime beijingTime = instant.atZone(ZoneId.of("Asia/Shanghai"));
                     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
                     String beijingTimeStr = beijingTime.format(formatter);
     
-                    // 对 rawJson 字段进行转义并用双引号包裹
                     String escapedRawJson = escapeCsvField(rawJson);
     
-                    // 写入 curated 文件
+                    // 写入 curated 文件（新增 md5sum 列）
                     if (tolistNode.isArray()) {
                         for (JsonNode to : tolistNode) {
                             String receiver = to.asText();
-                            curatedWriter.write(seqStr + "," + msgid + "," + action + "," + sender + "," + receiver + "," + roomid + "," + beijingTimeStr + "," + msgtype + "," + sdkfileid + "," + escapedRawJson);
+                            curatedWriter.write(seqStr + "," + msgid + "," + action + "," + sender + "," + receiver + "," + roomid + "," + beijingTimeStr + "," + msgtype + "," + sdkfileid + "," + md5sum + "," + escapedRawJson);
                             curatedWriter.newLine();
                         }
                     } else {
                         String receiver = tolistNode.toString();
-                        curatedWriter.write(seqStr + "," + msgid + "," + action + "," + sender + "," + receiver + "," + roomid + "," + beijingTimeStr + "," + msgtype + "," + sdkfileid + "," + escapedRawJson);
+                        curatedWriter.write(seqStr + "," + msgid + "," + action + "," + sender + "," + receiver + "," + roomid + "," + beijingTimeStr + "," + msgtype + "," + sdkfileid + "," + md5sum + "," + escapedRawJson);
                         curatedWriter.newLine();
                     }
                 }
             }
+    
+            logger.info(String.format("解密完成: 总数据条数=%d, 成功=%d, 失败=%d", totalCount, successCount, failureCount));
+            if (!failureDetails.isEmpty()) {
+                logger.info("解密失败的数据: " + String.join("; ", failureDetails));
+            }
+            return true;
         } catch (Exception e) {
             logger.severe("解密并保存到 curated 文件失败: " + e.getMessage());
             return false;
         }
+    }
     
-        // 输出总结日志
-        logger.info(String.format(
-            "解密完成: 总数据条数=%d, 成功=%d, 失败=%d",
-            totalCount, successCount, failureCount
-        ));
-    
-        // 输出解密失败的详细信息
-        if (!failureDetails.isEmpty()) {
-            logger.info("解密失败的数据: " + String.join("; ", failureDetails));
-        }
-    
-        logger.info("解密并保存到 curated 文件完成: " + curatedFilePath);
-        return true;
+    // 新增方法：提取 md5sum
+    private static String extractMd5Sum(JsonNode decryptedRootNode, String msgtype) {
+        JsonNode msgTypeNode = decryptedRootNode.path(msgtype);
+        return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
     public static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
-        Set<String> processedSdkFileIds = new HashSet<>();
+        Set<String> processedMd5Sums = new HashSet<>();
         try (BufferedReader chatReader = new BufferedReader(new FileReader(chatFilePath));
              BufferedWriter mediaWriter = new BufferedWriter(new FileWriter(mediaFilesPath))) {
     
+            // 新表头
             if (new File(mediaFilesPath).length() == 0) {
-                mediaWriter.write("msgtype,sdkfileid,status,comment");
+                mediaWriter.write("msgtype,md5sum");
                 mediaWriter.newLine();
             }
     
@@ -509,35 +498,29 @@ public class FetchData {
                     continue;
                 }
     
-                String[] fields = line.split(",");
-                if (fields.length < 9) {
+                String[] fields = line.split(",", -1); // 兼容空字段
+                if (fields.length < 11) { // 检查列数是否包含 md5sum
                     logger.warning("chat.csv 格式不正确，跳过行: " + line);
                     continue;
                 }
     
                 String msgtype = fields[7];
-                String sdkfileid = fields[8];
+                String md5sum = fields[9]; // md5sum 在第 10 列（索引 9）
     
-                if (!isValidMsgType(msgtype)) {
+                if (!isValidMsgType(msgtype) || StringUtils.isBlank(md5sum)) {
                     continue;
                 }
     
-                if (!isValidSDKFileId(sdkfileid)) {
-                    logger.warning("sdkfileid 不合法或为空: msgtype=" + msgtype + ", sdkfileid=" + sdkfileid);
-                    continue;
-                }
-    
-                if (!processedSdkFileIds.contains(sdkfileid)) {
-                    mediaWriter.write(String.format("%s,%s,%s,%s", msgtype, sdkfileid, "tbd", ""));
+                if (!processedMd5Sums.contains(md5sum)) {
+                    mediaWriter.write(String.format("%s,%s", msgtype, md5sum));
                     mediaWriter.newLine();
-                    processedSdkFileIds.add(sdkfileid);
+                    processedMd5Sums.add(md5sum);
                 }
             }
         } catch (IOException e) {
             logger.severe("生成 media_files.csv 时发生错误: " + e.getMessage());
             return false;
         }
-        
         return true;
     }
 
@@ -664,44 +647,56 @@ public class FetchData {
         return "\"" + escapedField + "\"";
     }
 
+    private static void downloadMediaFile(long sdk, String md5sum, String msgtype) {
+        String indexbuf = "";
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("media_", ".tmp");
+            try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                boolean isFinished = false;
+                while (!isFinished) {
+                    long mediaData = Finance.NewMediaData();
+                    int ret = Finance.GetMediaData(sdk, indexbuf, md5sum, null, null, 10, mediaData); // 使用 md5sum
+                    if (ret != 0) {
+                        Finance.FreeMediaData(mediaData);
+                        throw new IOException("GetMediaData failed with ret: " + ret);
+                    }
+    
+                    byte[] data = Finance.GetData(mediaData);
+                    fos.write(data);
+                    isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
+                    if (!isFinished) {
+                        indexbuf = Finance.GetOutIndexBuf(mediaData);
+                    }
+                    Finance.FreeMediaData(mediaData);
+                }
+            }
+    
+            // 上传到 S3
+            String s3Key = getMediaS3Key(msgtype, md5sum);
+            uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+        } catch (Exception e) {
+            logger.severe("下载媒体文件失败: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
     /**
      * 下载媒体文件到 S3 存储桶
      */
     private static boolean downloadMediaFilesToS3(long sdk) {
-        boolean allFilesDownloaded = true;
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("正在读取 media_files.csv 文件: " + mediaFilesPath);
     
-        // 初始化日志聚合器
-        logAggregator = new LogAggregator(mediaFilesPath);
-    
-        // 初始化定时任务线程池 B
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-        scheduler.scheduleAtFixedRate(() -> {
-            if (logAggregator != null) {
-                logAggregator.logStatistics();
-            } else {
-                logger.severe("LogAggregator 未初始化");
-            }
-        }, 0, 1, TimeUnit.MINUTES);
-    
-        // 初始化下载任务线程池 A 和 B
-        ExecutorService executorServiceA = Executors.newFixedThreadPool(10); // 线程池 A 的并发度为 10
-        ExecutorService executorServiceB = Executors.newFixedThreadPool(3);  // 线程池 B 的并发度为 3
-        
-        List<Future<?>> futuresA = new ArrayList<>(); // 存储线程池 A 的任务
-        List<Future<?>> futuresB = new ArrayList<>(); // 存储线程池 B 的任务
-    
-        // 存储需要处理的 sdkFileIds 及其对应的 msgtype
-        Map<String, String> sdkFileIdsWithMsgType = new HashMap<>();
-        Set<String> sdkFileIdsToProcess = new HashSet<>();
+        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        List<Future<?>> futures = new ArrayList<>();
+        Map<String, String> md5sumToMsgType = new HashMap<>();
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
-                .withCSVParser(new CSVParserBuilder()
-                        .withQuoteChar('"')
-                        .withEscapeChar('\\')
-                        .withIgnoreLeadingWhiteSpace(true)
-                        .build())
+                .withCSVParser(new CSVParserBuilder().build())
                 .build()) {
             String[] fields;
             boolean isHeader = true;
@@ -712,74 +707,39 @@ public class FetchData {
                     continue;
                 }
     
-                if (fields.length < 4) {
-                    continue;
-                }
-    
-                String sdkfileid = fields[1];
+                if (fields.length < 2) continue;
                 String msgtype = fields[0];
-                String status = fields[2];
+                String md5sum = fields[1];
     
-                if (!isValidMsgType(msgtype)) {
+                if (!isValidMsgType(msgtype) || StringUtils.isBlank(md5sum)) {
                     continue;
                 }
     
-                if (!isValidSDKFileId(sdkfileid)) {
-                    logger.warning("sdkfileid 不合法或为空: msgtype=" + msgtype + ", sdkfileid=" + sdkfileid);
-                    continue;
-                }
-    
-                if ("tbd".equalsIgnoreCase(status)) {
-                    sdkFileIdsToProcess.add(sdkfileid);
-                    sdkFileIdsWithMsgType.put(sdkfileid, msgtype);
-                }
+                md5sumToMsgType.put(md5sum, msgtype);
             }
-        } catch (IOException | CsvValidationException e) {
-            logger.severe("读取 media_files.csv 文件失败: " + e.getMessage());
+    
+            // 提交下载任务
+            for (String md5sum : md5sumToMsgType.keySet()) {
+                String msgtype = md5sumToMsgType.get(md5sum);
+                futures.add(executorService.submit(() -> {
+                    try {
+                        downloadMediaFile(sdk, md5sum, msgtype);
+                    } catch (Exception e) {
+                        logger.severe("下载失败: " + e.getMessage());
+                    }
+                }));
+            }
+    
+            // 等待任务完成
+            for (Future<?> future : futures) {
+                future.get();
+            }
+            executorService.shutdown();
+            return true;
+        } catch (Exception e) {
+            logger.severe("下载媒体文件失败: " + e.getMessage());
             return false;
         }
-    
-        // 提交下载任务到线程池 A
-        for (String sdkfileid : sdkFileIdsToProcess) {
-            String msgtype = sdkFileIdsWithMsgType.get(sdkfileid);
-            if (msgtype == null || msgtype.isEmpty()) {
-                logger.warning("无法获取 msgtype，跳过 sdkfileid: " + sdkfileid);
-                continue;
-            }
-    
-            Future<?> future = executorServiceA.submit(() -> {
-                try {
-                    boolean success = downloadMediaFileWithRetry(sdk, sdkfileid, msgtype, mediaFilesPath, executorServiceB);
-                    updateMediaFileStatus(mediaFilesPath, sdkfileid, success ? STATUS_SUCCESS : STATUS_FAILED, "");
-                } catch (Exception e) {
-                    logger.severe("下载任务失败: " + e.getMessage());
-                }
-            });
-            futuresA.add(future);
-        }
-    
-        // 等待线程池 A 的任务完成
-        for (Future<?> future : futuresA) {
-            try {
-                future.get();
-            } catch (Exception e) {
-                logger.severe("任务执行失败: " + e.getMessage());
-            }
-        }
-    
-        // 停止线程池 A 和线程池 B
-        executorServiceA.shutdown();
-        executorServiceB.shutdown();
-    
-        try {
-            if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
-                scheduler.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            logger.severe("定时任务关闭中断: " + e.getMessage());
-        }
-    
-        return allFilesDownloaded;
     }
 
     private static boolean downloadMediaFileWithRetry(long sdk, String sdkfileid, String msgtype, String mediaFilesPath, ExecutorService executorServiceB) throws Exception {
