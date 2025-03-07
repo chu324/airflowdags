@@ -512,11 +512,12 @@ public class FetchData {
     }
 
     /**
-     * 生成媒体文件清单CSV（带越界保护）
-     * @param chatFilePath    原始聊天文件路径
-     * @param mediaFilesPath  输出媒体文件清单路径
-     * @return 是否生成成功
-     */
+         * 生成媒体文件清单CSV（带越界保护）
+         * @param chatFilePath    原始聊天文件路径
+         * @param mediaFilesPath  输出媒体文件清单路径
+         * @return 是否生成成功
+         */
+        // 修改后的generateMediaFilesCSV方法
     public static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
         final int REQUIRED_COLUMNS = 11; // 根据chat.csv的列数定义
         Set<String> processedMd5Sums = new HashSet<>();
@@ -526,8 +527,8 @@ public class FetchData {
                 .build();
              CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
     
-            // 写入表头
-            csvWriter.writeNext(new String[]{"msgtype", "md5sum"});
+            // 写入新表头（增加sdkfileid列）
+            csvWriter.writeNext(new String[]{"msgtype", "sdkfileid", "md5sum"});
     
             String[] record;
             while ((record = csvReader.readNext()) != null) {
@@ -537,6 +538,7 @@ public class FetchData {
                 }
     
                 String msgtype = record[7].trim();
+                String sdkfileid = record[8].trim();
                 String md5sum = record[9].trim();
     
                 // 空值检查
@@ -544,15 +546,15 @@ public class FetchData {
                     logger.fine("跳过非媒体类型: " + msgtype);
                     continue;
                 }
-
-                if (StringUtils.isBlank(md5sum)) {
-                    logger.warning("媒体类型记录缺少 md5sum: " + msgtype);
+    
+                if (StringUtils.isBlank(sdkfileid) || StringUtils.isBlank(md5sum)) {
+                    logger.warning("媒体类型记录缺少必要字段: " + msgtype);
                     continue;
                 }
     
-                // 去重处理
+                // 去重处理（基于md5sum）
                 if (processedMd5Sums.add(md5sum)) {
-                    csvWriter.writeNext(new String[]{msgtype, md5sum});
+                    csvWriter.writeNext(new String[]{msgtype, sdkfileid, md5sum});
                 }
             }
             return true;
@@ -684,22 +686,25 @@ public class FetchData {
     }
 
     /**
-     * 下载媒体文件到临时文件并上传到S3
-     * @param sdk       SDK实例
-     * @param md5sum    媒体文件唯一标识（根据业务需求）
-     * @param msgtype   消息类型（image/voice/video等）
-     */
-    private static void downloadMediaFile(long sdk, String md5sum, String msgtype) {
+         * 下载媒体文件到临时文件并上传到S3
+         * @param sdk       SDK实例
+         * @param md5sum    媒体文件唯一标识（根据业务需求）
+         * @param msgtype   消息类型（image/voice/video等）
+         */
+        private static void downloadMediaFile(long sdk, String sdkfileid, String md5sum, String msgtype) {
         String indexbuf = "";
         File tempFile = null;
+        
         try {
-            tempFile = File.createTempFile("media_", ".tmp");
+            // 创建以md5sum命名的临时文件
+            tempFile = File.createTempFile(md5sum + "_", ".tmp");
+            
             try (FileOutputStream fos = new FileOutputStream(tempFile)) {
                 boolean isFinished = false;
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
                     try {
-                        int ret = Finance.GetMediaData(sdk, indexbuf, md5sum, null, null, 10, mediaData);
+                        int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
                         if (ret != 0) {
                             throw new SdkException(ret, "GetMediaData failed, ret=" + ret);
                         }
@@ -710,26 +715,53 @@ public class FetchData {
                         if (!isFinished) {
                             indexbuf = Finance.GetOutIndexBuf(mediaData);
                         }
-                    } catch (IOException e) {
-                        logger.severe("IO错误: " + e.getMessage());
                     } finally {
                         Finance.FreeMediaData(mediaData);
                     }
                 }
             }
     
+            // 生成最终文件名并重命名临时文件
+            String finalFileName = generateMediaFileName(md5sum, msgtype);
+            File finalFile = new File(tempFile.getParent(), finalFileName);
+            Files.move(tempFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+    
+            // 上传到S3
             String s3Key = getMediaS3Key(msgtype, md5sum);
-            uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-            logger.info("媒体文件下载成功: md5sum=" + md5sum);
-        } catch (Exception e) {  // 直接捕获通用异常
-            logger.severe("下载媒体文件失败: " + e.getMessage());
-            saveFailedRecordsToCSV("SYSTEM_ERROR", md5sum, -1);
+            uploadFileToS3(finalFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+        } catch (Exception e) {
+            throw new RuntimeException("媒体文件处理失败", e);
         } finally {
             if (tempFile != null && tempFile.exists()) {
                 tempFile.delete();
             }
         }
     }
+
+    private static String generateMediaFileName(String md5sum, String msgtype) {
+        String extension = "";
+        switch (msgtype) {
+            case "image":
+                extension = ".jpg";
+                break;
+            case "voice":
+                extension = ".mp3";
+                break;
+            case "video":
+                extension = ".mp4";
+                break;
+            case "emotion":
+                extension = ".gif";
+                break;
+            case "file":
+                extension = ".bin";
+                break;
+            default:
+                extension = ".dat";
+        }
+        return md5sum + extension;
+    }
+
             
     /**
      * 生成媒体文件S3存储路径
@@ -740,9 +772,9 @@ public class FetchData {
     private static String getMediaS3Key(String msgtype, String md5sum) {
         String safeMsgType = isValidMsgType(msgtype) ? msgtype : "unknown";
         return String.format("media/%s/%s/%s", 
-            LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE), // 按日期分区
+            LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
             safeMsgType,
-            md5sum
+            generateMediaFileName(md5sum, msgtype)
         );
     }
 
@@ -753,115 +785,57 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
-        // 创建主线程池和重试线程池
         ExecutorService mainExecutor = Executors.newFixedThreadPool(10);
-        ExecutorService retryExecutor = Executors.newCachedThreadPool();
-        Map<String, String> md5sumToMsgType = new ConcurrentHashMap<>();
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder().build())
                 .build()) {
-            
+    
             // 跳过表头
             csvReader.readNext();
     
             String[] record;
             while ((record = csvReader.readNext()) != null) {
-                if (record.length < 2) {
+                if (record.length < 3) {
                     logger.warning("无效的CSV记录: " + Arrays.toString(record));
                     continue;
                 }
     
                 String msgtype = record[0].trim();
-                String md5sum = record[1].trim();
-
-                if (!isValidMsgType(msgtype)) {
-                    logger.fine("跳过非媒体类型: " + msgtype);
+                String sdkfileid = record[1].trim();
+                String md5sum = record[2].trim();
+    
+                if (!isValidMsgType(msgtype) || StringUtils.isBlank(sdkfileid) || StringUtils.isBlank(md5sum)) {
+                    logger.warning("跳过无效记录: " + Arrays.toString(record));
                     continue;
                 }
     
-                if (StringUtils.isBlank(md5sum)) {
-                    logger.warning("媒体类型记录缺少 md5sum: " + msgtype);
-                    continue;
-                }
-    
-                md5sumToMsgType.put(md5sum, msgtype);
-            }
-    
-            // 提交下载任务
-            md5sumToMsgType.forEach((md5sum, msgtype) -> {
                 mainExecutor.submit(() -> {
                     try {
-                        int retryCount = 0;
-                        final int MAX_RETRIES = 3;
-                        boolean success = false;
-    
-                        while (retryCount <= MAX_RETRIES && !success) {
-                            try {
-                                downloadMediaFile(sdk, md5sum, msgtype);
-                                success = true;
-                                successCount.incrementAndGet();
-                                logger.info("媒体文件下载成功: md5sum=" + md5sum);
-                            } catch (SdkException e) {
-                                if (e.getStatusCode() == 10001 && retryCount < MAX_RETRIES) {
-                                    retryCount++;
-                                    logger.warning(String.format(
-                                        "网络波动重试中 (md5sum=%s, 尝试次数 %d/%d)",
-                                        md5sum, retryCount, MAX_RETRIES
-                                    ));
-                                    Thread.sleep(5000 * retryCount); // 递增退避
-                                } else {
-                                    throw e; // 无法恢复的错误
-                                }
-                            }
-                        }
-    
-                        if (!success) {
-                            failureCount.incrementAndGet();
-                            logger.severe("媒体文件最终下载失败: md5sum=" + md5sum);
-                            saveFailedRecordsToCSV("DOWNLOAD_FAILURE", md5sum, -1);
-                        }
+                        downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
+                        successCount.incrementAndGet();
+                        logger.info("媒体文件下载成功: " + md5sum);
                     } catch (Exception e) {
-                        logger.log(Level.SEVERE, "媒体文件处理异常: md5sum=" + md5sum, e);
                         failureCount.incrementAndGet();
-                        saveFailedRecordsToCSV("SYSTEM_ERROR", md5sum, -1);
+                        logger.severe("媒体文件下载失败: " + md5sum + " - " + e.getMessage());
+                        saveFailedRecordsToCSV("DOWNLOAD_FAILURE", md5sum, -1);
                     }
                 });
-            });
-    
-        } catch (IOException | CsvValidationException e) {
-            logger.log(Level.SEVERE, "读取媒体文件清单失败", e);
-            return false;
-        } finally {
-            // 优雅关闭线程池
-            shutdownExecutor(mainExecutor, "MainExecutor");
-            shutdownExecutor(retryExecutor, "RetryExecutor");
-        }
-    
-        // 打印最终统计
-        logger.info(String.format(
-            "媒体文件下载完成！成功: %d, 失败: %d, 总任务: %d",
-            successCount.get(),
-            failureCount.get(),
-            md5sumToMsgType.size()
-        ));
-    
-        return failureCount.get() == 0;
-    }
-    
-    // 辅助方法：优雅关闭线程池
-    private static void shutdownExecutor(ExecutorService executor, String poolName) {
-        try {
-            executor.shutdown();
-            if (!executor.awaitTermination(1, TimeUnit.HOURS)) {
-                logger.warning(poolName + " 强制终止剩余任务");
-                executor.shutdownNow();
             }
-        } catch (InterruptedException e) {
-            logger.severe(poolName + " 关闭过程被中断");
-            Thread.currentThread().interrupt();
+    
+            mainExecutor.shutdown();
+            if (!mainExecutor.awaitTermination(1, TimeUnit.HOURS)) {
+                logger.warning("部分媒体文件下载任务超时");
+            }
+    
+            logger.info(String.format("媒体文件下载完成！成功: %d, 失败: %d",
+                    successCount.get(), failureCount.get()));
+            return failureCount.get() == 0;
+        } catch (Exception e) {
+            logger.severe("处理媒体文件清单失败: " + e.getMessage());
+            return false;
         }
     }
 
