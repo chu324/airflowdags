@@ -768,7 +768,7 @@ public class FetchData {
      */
     private static String getMediaS3Key(String msgtype, String md5sum) {
         String safeMsgType = isValidMsgType(msgtype) ? msgtype : "unknown";
-        return String.format("media/%s/%s/%s", 
+        return String.format("raw/wecom_chat/media/%s/%s/%s", 
             LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
             safeMsgType,
             generateMediaFileName(md5sum, msgtype)
