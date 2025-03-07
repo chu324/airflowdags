@@ -708,6 +708,8 @@ public class FetchData {
                         int ret = Finance.GetMediaData(sdk, indexbuf, md5sum, null, null, 10, mediaData);
                         if (ret != 0) {
                             throw new SdkException(ret, "GetMediaData failed, ret=" + ret);
+                        } catch (IOException e) { // 仅捕获其他异常
+                            logger.severe("IO错误: " + e.getMessage());
                         }
     
                         byte[] data = Finance.GetData(mediaData);
