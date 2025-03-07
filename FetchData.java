@@ -1076,14 +1076,8 @@ public class FetchData {
         }
     }
 
-    /**
-     * 递归删除 raw 和 curated 目录下的所有文件和子目录
-     * @param rawDirPath    raw目录路径（例如：/data/raw）
-     * @param curatedDirPath curated目录路径（例如：/data/curated）
-     */
-    public static void deleteDirectoryContents(String rawDirPath, String curatedDirPath) {
-        deleteDirContents(new File(rawDirPath));
-        deleteDirContents(new File(curatedDirPath));
+   public static void deleteDirectoryContents(String dirPath) {
+        deleteDirContents(new File(dirPath));
     }
     
     /**
