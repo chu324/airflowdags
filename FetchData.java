@@ -704,12 +704,9 @@ public class FetchData {
                 while (!isFinished) {
                     long mediaData = Finance.NewMediaData();
                     try {
-                        // 注意：这里使用md5sum作为唯一标识参数
                         int ret = Finance.GetMediaData(sdk, indexbuf, md5sum, null, null, 10, mediaData);
                         if (ret != 0) {
                             throw new SdkException(ret, "GetMediaData failed, ret=" + ret);
-                        } catch (IOException e) { // 仅捕获其他异常
-                            logger.severe("IO错误: " + e.getMessage());
                         }
     
                         byte[] data = Finance.GetData(mediaData);
@@ -718,6 +715,8 @@ public class FetchData {
                         if (!isFinished) {
                             indexbuf = Finance.GetOutIndexBuf(mediaData);
                         }
+                    } catch (IOException e) {
+                        logger.severe("IO错误: " + e.getMessage());
                     } finally {
                         Finance.FreeMediaData(mediaData);
                     }
@@ -740,7 +739,7 @@ public class FetchData {
             }
         }
     }
-    
+        
     /**
      * 生成媒体文件S3存储路径
      * @param msgtype  消息类型
