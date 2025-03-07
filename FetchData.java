@@ -74,7 +74,7 @@ public class FetchData {
     private static final String STATUS_FAILED = "failed";
 
     // 自定义异常类（作为静态内部类）
-    public static class SdkException extends Exception {
+    public static class SdkException extends RuntimeException  {
         private final int statusCode;  // 错误码字段
 
         public SdkException(int statusCode, String message) {
@@ -723,14 +723,10 @@ public class FetchData {
                 }
             }
     
-            // 生成S3路径时使用md5sum作为唯一标识
             String s3Key = getMediaS3Key(msgtype, md5sum);
             uploadFileToS3(tempFile.getAbsolutePath(), mediaS3BucketName, s3Key);
             logger.info("媒体文件下载成功: md5sum=" + md5sum);
-        } catch (SdkException e) {
-            logger.severe("SDK操作失败: " + e.getMessage());
-            saveFailedRecordsToCSV("SDK_ERROR", md5sum, e.getStatusCode());
-        } catch (Exception e) {
+        } catch (Exception e) {  // 直接捕获通用异常
             logger.severe("下载媒体文件失败: " + e.getMessage());
             saveFailedRecordsToCSV("SYSTEM_ERROR", md5sum, -1);
         } finally {
@@ -739,7 +735,7 @@ public class FetchData {
             }
         }
     }
-        
+            
     /**
      * 生成媒体文件S3存储路径
      * @param msgtype  消息类型
