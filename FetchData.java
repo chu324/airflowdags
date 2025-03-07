@@ -62,10 +62,7 @@ public class FetchData {
 
     // 定时任务
     private static ScheduledExecutorService scheduler;
-
-    // 声明 logAggregator 为静态变量
-    private static LogAggregator logAggregator;
-
+    
     // 缓存 access_token 和过期时间
     private static String accessToken;
     private static long tokenExpiresTime;
@@ -788,6 +785,18 @@ public class FetchData {
         ExecutorService mainExecutor = Executors.newFixedThreadPool(10);
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
+        AtomicInteger totalMediaFiles = new AtomicInteger(0);
+    
+        // 创建定时进度报告
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            int total = totalMediaFiles.get();
+            int success = successCount.get();
+            int failed = failureCount.get();
+            int remaining = total - (success + failed);
+            logger.info(String.format("[媒体下载进度] 总数: %d, 成功: %d, 失败: %d, 剩余: %d",
+                    total, success, failed, remaining));
+        }, 1, 1, TimeUnit.MINUTES);
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
                 .withCSVParser(new CSVParserBuilder().build())
@@ -812,11 +821,12 @@ public class FetchData {
                     continue;
                 }
     
+                totalMediaFiles.incrementAndGet();
+    
                 mainExecutor.submit(() -> {
                     try {
                         downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
                         successCount.incrementAndGet();
-                        logger.info("媒体文件下载成功: " + md5sum);
                     } catch (Exception e) {
                         failureCount.incrementAndGet();
                         logger.severe("媒体文件下载失败: " + md5sum + " - " + e.getMessage());
@@ -826,8 +836,18 @@ public class FetchData {
             }
     
             mainExecutor.shutdown();
-            if (!mainExecutor.awaitTermination(1, TimeUnit.HOURS)) {
+            if (!mainExecutor.awaitTermination(2, TimeUnit.HOURS)) {
                 logger.warning("部分媒体文件下载任务超时");
+            }
+    
+            // 关闭定时任务
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
             }
     
             logger.info(String.format("媒体文件下载完成！成功: %d, 失败: %d",
@@ -836,6 +856,10 @@ public class FetchData {
         } catch (Exception e) {
             logger.severe("处理媒体文件清单失败: " + e.getMessage());
             return false;
+        } finally {
+            if (!scheduler.isShutdown()) {
+                scheduler.shutdownNow();
+            }
         }
     }
 
@@ -1191,7 +1215,6 @@ public class FetchData {
             // 格式：错误类型（ret代码）,sdkfileid
             writer.write(errorType + " (" + retCode + ")," + sdkfileid);
             writer.newLine();
-            logAggregator.incrementFailedRecordsCount();
         } catch (IOException e) {
             logger.severe("记录失败文件信息失败: " + e.getMessage());
         }
