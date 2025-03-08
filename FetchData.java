@@ -234,7 +234,7 @@ public class FetchData {
         if (!rawDir.exists()) {
             rawDir.mkdirs(); // 创建目录
         }
-        rawFilePath = rawDirPath + "/wecom_chat_" + taskDateStr + "_raw.csv";
+        rawFilePath = rawDirPath + "/wecom_chat_" + taskDateStr + ".csv";
     
         // 初始化 curated 文件路径
         String curatedDirPath = "data/curated/" + taskDateStr;
@@ -768,8 +768,7 @@ public class FetchData {
      */
     private static String getMediaS3Key(String msgtype, String md5sum) {
         String safeMsgType = isValidMsgType(msgtype) ? msgtype : "unknown";
-        return String.format("raw/wecom_chat/media/%s/%s/%s", 
-            LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
+        return String.format("raw/wecom_chat/media/%s/%s",
             safeMsgType,
             generateMediaFileName(md5sum, msgtype)
         );
@@ -1050,8 +1049,8 @@ public class FetchData {
     private static boolean compressAndUploadFilesToS3() {
         try {
             // 压缩并上传 raw 文件
-            String rawZipFilePath = compressFile(rawFilePath, "wecom_chat_" + taskDateStr + "_raw.zip");
-            String rawS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/wecom_chat_" + taskDateStr + "_raw.zip";
+            String rawZipFilePath = compressFile(rawFilePath, "wecom_chat_" + taskDateStr + ".zip");
+            String rawS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/wecom_chat_" + taskDateStr + ".zip";
             logger.info("开始上传 raw 文件到 S3: " + rawS3Key);
             uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
             logger.info("raw 文件上传完成: " + rawS3Key);
