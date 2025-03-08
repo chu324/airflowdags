@@ -777,43 +777,39 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
-        // 检查文件是否存在且非空
-        File mediaFile = new File(mediaFilesPath);
-        if (!mediaFile.exists() || mediaFile.length() == 0) {
-            logger.severe("媒体文件清单不存在或为空: " + mediaFilesPath);
-            return false;
-        }
+        // 检查文件有效性
+        if (!validateMediaFile(mediaFilesPath)) return false;
     
-        // 初始化线程池
-        int coreThreads = 20; // 核心线程数
-        int maxThreads = 50;  // 最大线程数
+        // 初始化线程池（核心优化点）
+        int coreThreads = 20;
+        int maxThreads = 50;
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
             coreThreads,
             maxThreads,
             60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(1000)
+            new LinkedBlockingQueue<>(5000), // 增大队列容量避免拒绝
+            new ThreadPoolExecutor.CallerRunsPolicy() // 添加饱和策略
         );
     
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
-        List<String> allTasks = new ArrayList<>(); // 记录所有任务标识（用于失败重试）
-    
-        // 加载所有任务
-        allTasks = loadAllMediaRecords(mediaFilesPath);
+        List<String> allTasks = loadAllMediaRecords(mediaFilesPath);
         int totalTasks = allTasks.size();
         logger.info("总媒体文件下载任务数: " + totalTasks);
     
-        // 启动定时任务，每分钟打印一次进度
+        // 进度监控（优化日志输出）
         ScheduledExecutorService progressScheduler = Executors.newSingleThreadScheduledExecutor();
         progressScheduler.scheduleAtFixedRate(() -> {
             int completed = successCount.get() + failureCount.get();
+            double progress = (completed * 100.0) / totalTasks;
             logger.info(String.format(
-                "[下载进度] 总任务数: %d, 已完成: %d, 成功: %d, 失败: %d",
-                totalTasks, completed, successCount.get(), failureCount.get()
+                "[下载进度] 总任务=%d, 完成=%.1f%%, 成功=%d, 失败=%d, 队列积压=%d",
+                totalTasks, progress, successCount.get(), failureCount.get(),
+                executor.getQueue().size()
             ));
-        }, 1, 1, TimeUnit.MINUTES); // 初始延迟 1 分钟，之后每 1 分钟执行一次
+        }, 1, 1, TimeUnit.MINUTES);
     
-        // 分批次处理（每批次1000条）
+        // 分批次处理（修复关键点）
         int batchSize = 1000;
         List<List<String>> batches = batchMediaRecords(allTasks, batchSize);
         logger.info("媒体文件分批次处理，总批次: " + batches.size());
@@ -825,64 +821,89 @@ public class FetchData {
     
             CountDownLatch batchLatch = new CountDownLatch(batch.size());
             for (String taskId : batch) {
-                executor.submit(() -> {
-                    try {
-                        // 带重试的任务执行
-                        executeTaskWithRetry(sdk, taskId, 3); // 最大重试3次
-                        successCount.incrementAndGet();
-                    } catch (Exception e) {
-                        failureCount.incrementAndGet();
-                        logger.severe("任务失败: " + taskId + " - " + e.getMessage());
-                        
-                        // 修复点：补充 retCode 参数
-                        int retCode = (e instanceof SdkException) ? ((SdkException) e).getStatusCode() : -1;
-                        saveFailedRecordsToCSV("DOWNLOAD_FAILURE", taskId, retCode);
-                    } finally {
-                        batchLatch.countDown();
-                    }
-                });
+                try {
+                    executor.submit(() -> {
+                        try {
+                            executeTaskWithRetry(sdk, taskId, 3);
+                            successCount.incrementAndGet();
+                        } catch (Exception e) {
+                            handleTaskFailure(e, taskId, failureCount);
+                        } finally {
+                            batchLatch.countDown(); // 确保计数器释放
+                        }
+                    });
+                } catch (RejectedExecutionException e) {
+                    logger.severe("任务提交被拒绝（线程池已满）: " + taskId);
+                    failureCount.incrementAndGet();
+                    saveFailedRecordsToCSV("REJECTED", taskId, -1);
+                    batchLatch.countDown(); // 关键修复：手动释放计数器
+                }
             }
     
-            // 批次超时控制（每批次最多30分钟）
+            // 批次超时控制（优化超时处理）
             try {
                 if (!batchLatch.await(30, TimeUnit.MINUTES)) {
-                    logger.warning("批次 " + batchIndex + " 超时，剩余任务: " + batchLatch.getCount());
-                    // 记录超时任务
-                    for (int i = 0; i < batchLatch.getCount(); i++) {
-                        saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
-                    }
+                    logger.warning("批次超时，剩余任务: " + batchLatch.getCount());
+                    handleTimeoutTasks(batchLatch, failureCount);
                 }
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt(); // Restore the interrupted status
-                logger.severe("线程在等待批次完成时被中断: " + e.getMessage());
+                Thread.currentThread().interrupt();
+                logger.severe("线程中断: " + e.getMessage());
                 return false;
             }
         }
     
-        // 动态计算总超时时间并关闭线程池
-        long totalTimeout = calculateTotalTimeout(batches.size(), batchSize);
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(totalTimeout, TimeUnit.MINUTES)) {
-                List<Runnable> pendingTasks = executor.shutdownNow();
-                logger.severe("全局超时，强制关闭剩余任务: " + pendingTasks.size());
-                // 记录未完成任务
-                for (Runnable task : pendingTasks) {
-                    saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
-                }
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // Restore the interrupted status
-            logger.severe("线程在等待线程池关闭时被中断: " + e.getMessage());
-            return false;
-        }
-    
-        // 关闭进度打印任务
+        // 优雅关闭线程池（新增关闭逻辑）
+        shutdownExecutor(executor, totalTasks);
         progressScheduler.shutdown();
     
-        logger.info(String.format("媒体下载完成: 总任务数=%d, 成功=%d, 失败=%d", 
+        logger.info(String.format("媒体下载完成: 总任务=%d, 成功=%d, 失败=%d", 
             totalTasks, successCount.get(), failureCount.get()));
         return failureCount.get() == 0;
+    }
+    
+    // ----------- 新增辅助方法 -----------
+    private static boolean validateMediaFile(String mediaFilesPath) {
+        File mediaFile = new File(mediaFilesPath);
+        if (!mediaFile.exists() || mediaFile.length() == 0) {
+            logger.severe("媒体文件清单不存在或为空: " + mediaFilesPath);
+            return false;
+        }
+        return true;
+    }
+    
+    private static void handleTaskFailure(Exception e, String taskId, AtomicInteger failureCount) {
+        failureCount.incrementAndGet();
+        String errorMsg = e.getMessage();
+        int retCode = (e.getCause() instanceof SdkException) ? 
+            ((SdkException) e.getCause()).getStatusCode() : -1;
+        
+        logger.severe(String.format("任务失败: %s (ret=%d), 错误: %s", 
+            taskId, retCode, errorMsg));
+        saveFailedRecordsToCSV("FAILED", taskId, retCode);
+    }
+    
+    private static void handleTimeoutTasks(CountDownLatch latch, AtomicInteger failureCount) {
+        long remaining = latch.getCount();
+        failureCount.addAndGet((int) remaining);
+        for (int i = 0; i < remaining; i++) {
+            saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+        }
+    }
+    
+    private static void shutdownExecutor(ThreadPoolExecutor executor, int totalTasks) {
+        executor.shutdown();
+        try {
+            long timeout = Math.max(30, totalTasks / 1000 * 5); // 动态计算超时
+            if (!executor.awaitTermination(timeout, TimeUnit.MINUTES)) {
+                List<Runnable> pending = executor.shutdownNow();
+                logger.severe("强制关闭剩余任务: " + pending.size());
+                pending.forEach(task -> saveFailedRecordsToCSV("SHUTDOWN", "unknown_task", -1));
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
