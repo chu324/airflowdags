@@ -431,6 +431,16 @@ public class FetchData {
         return true;
     }
 
+    private static synchronized void appendToRawFile(String content) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(rawFilePath, true))) {
+            writer.write(content);
+            writer.newLine();
+        } catch (IOException e) {
+            logger.severe("写入raw文件失败: " + e.getMessage());
+            throw new UncheckedIOException(e);
+        }
+    }
+
     private static String escapeControlCharacters(String content) {
         // 替换控制字符为空格或其他合法字符
         return content.replaceAll("[\\p{Cntrl}]", " ");
@@ -1130,7 +1140,10 @@ public class FetchData {
                 throw new RuntimeException(e);
             }
         }
-        throw new S3Exception("上传失败，超过最大重试次数", null);
+        throw S3Exception.builder()
+        .message("上传失败，超过最大重试次数")
+        .statusCode(500)
+        .build();
     }
 
     private static long calculateExponentialBackoff(int attempt) {
