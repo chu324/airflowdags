@@ -772,14 +772,14 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
-        // 1. 检查文件存在性
+        // 检查文件是否存在且非空
         File mediaFile = new File(mediaFilesPath);
         if (!mediaFile.exists() || mediaFile.length() == 0) {
             logger.severe("媒体文件清单不存在或为空: " + mediaFilesPath);
             return false;
         }
     
-        // 2. 初始化线程池（动态线程数，根据任务量调整）
+        // 初始化线程池
         int coreThreads = 20; // 核心线程数
         int maxThreads = 50;  // 最大线程数
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
@@ -793,7 +793,7 @@ public class FetchData {
         AtomicInteger failureCount = new AtomicInteger(0);
         List<String> allTasks = new ArrayList<>(); // 记录所有任务标识（用于失败重试）
     
-        // 3. 分批次处理（每批次1000条）
+        // 分批次处理（每批次1000条）
         int batchSize = 1000;
         List<List<String>> batches = loadAndBatchMediaRecords(mediaFilesPath, batchSize);
         logger.info("媒体文件分批次处理，总批次: " + batches.size());
@@ -807,31 +807,42 @@ public class FetchData {
             for (String taskId : batch) {
                 executor.submit(() -> {
                     try {
-                        // 4. 带重试的任务执行
+                        // 带重试的任务执行
                         executeTaskWithRetry(sdk, taskId, 3); // 最大重试3次
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         failureCount.incrementAndGet();
                         logger.severe("任务失败: " + taskId + " - " + e.getMessage());
-                        saveFailedRecordsToCSV("FAILED", taskId);
+                        
+                        // 修复点：补充 retCode 参数
+                        int retCode = (e instanceof SdkException) ? ((SdkException) e).getStatusCode() : -1;
+                        saveFailedRecordsToCSV("DOWNLOAD_FAILURE", taskId, retCode);
                     } finally {
                         batchLatch.countDown();
                     }
                 });
             }
     
-            // 5. 批次超时控制（每批次最多30分钟）
+            // 批次超时控制（每批次最多30分钟）
             if (!batchLatch.await(30, TimeUnit.MINUTES)) {
                 logger.warning("批次 " + batchIndex + " 超时，剩余任务: " + batchLatch.getCount());
+                // 记录超时任务
+                for (int i = 0; i < batchLatch.getCount(); i++) {
+                    saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+                }
             }
         }
     
-        // 6. 动态计算总超时时间并关闭线程池
+        // 动态计算总超时时间并关闭线程池
         long totalTimeout = calculateTotalTimeout(batches.size(), batchSize);
         executor.shutdown();
         if (!executor.awaitTermination(totalTimeout, TimeUnit.MINUTES)) {
             List<Runnable> pendingTasks = executor.shutdownNow();
             logger.severe("全局超时，强制关闭剩余任务: " + pendingTasks.size());
+            // 记录未完成任务
+            for (Runnable task : pendingTasks) {
+                saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+            }
         }
     
         logger.info(String.format("媒体下载完成: 成功=%d, 失败=%d", 
@@ -889,6 +900,7 @@ public class FetchData {
             }
         }
     }
+
     
     /**
      * 动态计算总超时时间（公式: 批次数量 * 每批次超时30分钟 + 缓冲时间30分钟）
