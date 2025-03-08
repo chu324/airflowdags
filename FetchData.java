@@ -691,7 +691,13 @@ public class FetchData {
         File tempFile = null;
     
         try {
+            // 创建临时文件
             tempFile = File.createTempFile(md5sum + "_", ".tmp");
+            if (!tempFile.exists()) {
+                logger.severe("临时文件创建失败: " + tempFile.getAbsolutePath());
+                throw new IOException("临时文件创建失败");
+            }
+    
             try (FileOutputStream fos = new FileOutputStream(tempFile)) {
                 boolean isFinished = false;
                 while (!isFinished) {
@@ -719,10 +725,12 @@ public class FetchData {
             File finalFile = new File(tempFile.getParent(), finalFileName);
             Files.move(tempFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
     
-            // 上传到S3
+            // 上传到 S3
             String s3Key = getMediaS3Key(msgtype, md5sum);
             uploadFileToS3(finalFile.getAbsolutePath(), mediaS3BucketName, s3Key);
         } catch (Exception e) {
+            logger.severe("媒体文件处理失败: " + e.getMessage());
+            e.printStackTrace(); // 打印堆栈信息
             throw new RuntimeException("媒体文件处理失败", e);
         } finally {
             if (tempFile != null && tempFile.exists()) {
@@ -1038,6 +1046,7 @@ public class FetchData {
                 failureCount.incrementAndGet();
                 logger.severe("重试失败: taskId=" + taskId + ", 累计重试次数=" + retryCount);
                 savePendingTask(taskId, "FATAL_ERROR", -1); // 保存失败任务
+                e.printStackTrace(); // 打印堆栈信息
                 return; // 任务失败，退出循环
             }
         }
