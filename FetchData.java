@@ -999,7 +999,7 @@ public class FetchData {
     /**
      * 带重试的任务执行
      */
-    private static void executeTaskWithRetry(long sdk, String taskId, 
+    private static void executeTaskWithRetry(long sdk, String taskId,
             AtomicInteger successCount, AtomicInteger failureCount) {
         String[] parts = taskId.split("\\|");
         String msgtype = parts[0], sdkfileid = parts[1], md5sum = parts[2];
@@ -1011,13 +1011,7 @@ public class FetchData {
                 // 网络可达性检测
                 while (!isNetworkAvailable()) {
                     logger.warning("网络不可用[" + taskId + "] 等待恢复...");
-                    try {
-                        Thread.sleep(60000);
-                    } catch (InterruptedException ex) {
-                        Thread.currentThread().interrupt(); // 恢复中断状态
-                        logger.warning("等待网络恢复时被中断: " + ex.getMessage());
-                        break; // 退出循环或根据业务逻辑处理
-                    }
+                    Thread.sleep(60000);
                 }
     
                 logger.info("开始下载: " + taskId + " (重试次数=" + retryCount + ")");
@@ -1031,12 +1025,6 @@ public class FetchData {
             } catch (SdkException e) {
                 handleSdkException(e, taskId, retryCount, baseDelayMs);
                 retryCount++;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt(); // 恢复中断状态
-                logger.warning("任务执行被中断: " + taskId + " - " + e.getMessage());
-                failureCount.incrementAndGet();
-                saveFailedRecord(taskId, "INTERRUPTED", -1);
-                return;
             } catch (Exception e) {
                 failureCount.incrementAndGet();
                 logger.severe("不可恢复错误: " + taskId + " - " + e.getMessage());
