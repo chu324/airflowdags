@@ -517,8 +517,8 @@ public class FetchData {
                 .build();
              CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
 
-            String escapedSdkfileid = escapeCsvField(sdkfileid);
-            String escapedMd5sum = escapeCsvField(md5sum);
+            escapedSdkfileid = escapeCsvField(sdkfileid);
+            escapedMd5sum = escapeCsvField(md5sum);
             csvWriter.writeNext(new String[]{msgtype, escapedSdkfileid, escapedMd5sum});
     
             String[] record;
@@ -544,8 +544,8 @@ public class FetchData {
                 }
     
                 if (processedMd5Sums.add(md5sum)) {
-                    String escapedSdkfileid = escapeCsvField(sdkfileid);
-                    String escapedMd5sum = escapeCsvField(md5sum);
+                    escapedSdkfileid = escapeCsvField(sdkfileid);
+                    escapedMd5sum = escapeCsvField(md5sum);
                     csvWriter.writeNext(new String[]{msgtype, escapedSdkfileid, escapedMd5sum});
                 }
             }
