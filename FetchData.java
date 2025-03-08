@@ -2,6 +2,7 @@ package com.tencent.wework;
 
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.core.retry.RetryPolicy;
+import software.amazon.awssdk.core.retry.backoff.BackoffStrategy;
 import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -11,6 +12,7 @@ import software.amazon.awssdk.services.sns.SnsClient;
 import software.amazon.awssdk.services.sns.model.PublishRequest;
 import software.amazon.awssdk.services.sns.model.PublishResponse;
 import software.amazon.awssdk.services.sns.model.SnsException;
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,7 +21,6 @@ import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
 import com.opencsv.CSVParserBuilder;
 import com.opencsv.exceptions.CsvValidationException;
-
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.StandardCopyOption;
@@ -33,6 +34,7 @@ import java.time.LocalDate;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.zip.ZipEntry; 
 import java.util.zip.ZipOutputStream; 
@@ -333,12 +335,12 @@ public class FetchData {
                             continue;
                         } else {
                             logger.severe("GetChatData failed, ret: " + ret + ". 当前波动超过最大重试时间.");
-                            sendSNSErrorMessage("GetChatData 持续失败，ret=" + ret + "，当前波动超过最大重试时间。");
+                            //sendSNSErrorMessage("GetChatData 持续失败，ret=" + ret + "，当前波动超过最大重试时间。");
                             return false;
                         }
                     } else {
                         logger.severe("GetChatData failed, ret: " + ret + ". 任务中断。");
-                        sendSNSErrorMessage("GetChatData 失败，ret=" + ret + "，任务中断。");
+                        //sendSNSErrorMessage("GetChatData 失败，ret=" + ret + "，任务中断。");
                         return false;
                     }
                 }
