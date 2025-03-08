@@ -180,46 +180,42 @@ public class FetchData {
      */
     private static void generateUserIdMappingFile(String chatFilePath, String mappingFilePath) {
         Set<String> externalUserIds = new HashSet<>();
-        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath))
-                .withCSVParser(new CSVParserBuilder().build())
-                .build()) {
-            
+        int totalMappings = 0;
+    
+        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath)).build()) {
+            csvReader.readNext(); // Skip header
             String[] fields;
-            // 跳过表头
-            csvReader.readNext();
-            
             while ((fields = csvReader.readNext()) != null) {
                 if (fields.length < 5) continue;
-                
+    
                 String sender = fields[3];
                 String receiver = fields[4];
-                
-                if ((sender.startsWith("wo") || sender.startsWith("wm")) && !sender.startsWith("wb")) {
-                    externalUserIds.add(sender);
-                }
-                if ((receiver.startsWith("wo") || receiver.startsWith("wm")) && !receiver.startsWith("wb")) {
-                    externalUserIds.add(receiver);
-                }
+                if (isExternalUser(sender)) externalUserIds.add(sender);
+                if (isExternalUser(receiver)) externalUserIds.add(receiver);
             }
-        } catch (IOException | CsvValidationException e) {
+        } catch (Exception e) {
             logger.log(Level.SEVERE, "读取 chat 文件失败", e);
             return;
         }
     
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(mappingFilePath));
-             CSVWriter csvWriter = new CSVWriter(writer)) {
-            
+        try (CSVWriter csvWriter = new CSVWriter(new FileWriter(mappingFilePath))) {
             csvWriter.writeNext(new String[]{"external_userid", "unionid"});
-            
             for (String externalUserId : externalUserIds) {
                 String unionId = getUnionIdByExternalUserId(externalUserId);
                 if (unionId != null) {
                     csvWriter.writeNext(new String[]{externalUserId, unionId});
+                    totalMappings++;
                 }
             }
+            // 新增：生成记录数日志
+            logger.info("生成 userid_mapping 记录数: " + totalMappings);
         } catch (IOException e) {
             logger.log(Level.SEVERE, "写入 userid_mapping 文件失败", e);
         }
+    }
+
+    private static boolean isExternalUser(String userId) {
+        return (userId.startsWith("wo") || userId.startsWith("wm")) && !userId.startsWith("wb");
     }
 
     public static boolean fetchNewData(long sdk) {
@@ -508,29 +504,23 @@ public class FetchData {
         return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
-    /**
-         * 生成媒体文件清单CSV（带越界保护）
-         * @param chatFilePath    原始聊天文件路径
-         * @param mediaFilesPath  输出媒体文件清单路径
-         * @return 是否生成成功
-         */
-        // 修改后的generateMediaFilesCSV方法
     public static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
-        final int REQUIRED_COLUMNS = 11; // 根据chat.csv的列数定义
+        final int REQUIRED_COLUMNS = 11;
         Set<String> processedMd5Sums = new HashSet<>();
+        int totalRecords = 0;
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath))
                 .withCSVParser(new CSVParserBuilder().build())
                 .build();
              CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
     
-            // 写入新表头（增加sdkfileid列）
             csvWriter.writeNext(new String[]{"msgtype", "sdkfileid", "md5sum"});
     
             String[] record;
             while ((record = csvReader.readNext()) != null) {
+                totalRecords++;
                 if (record.length < REQUIRED_COLUMNS) {
-                    logger.warning("检测到不完整记录，跳过处理。实际列数: " + record.length);
+                    logger.warning("记录列数不足: 实际列数=" + record.length);
                     continue;
                 }
     
@@ -538,22 +528,23 @@ public class FetchData {
                 String sdkfileid = record[8].trim();
                 String md5sum = record[9].trim();
     
-                // 空值检查
                 if (!isValidMsgType(msgtype)) {
                     logger.fine("跳过非媒体类型: " + msgtype);
                     continue;
                 }
     
                 if (StringUtils.isBlank(sdkfileid) || StringUtils.isBlank(md5sum)) {
-                    logger.warning("媒体类型记录缺少必要字段: " + msgtype);
+                    logger.warning("字段为空: msgtype=" + msgtype);
                     continue;
                 }
     
-                // 去重处理（基于md5sum）
                 if (processedMd5Sums.add(md5sum)) {
                     csvWriter.writeNext(new String[]{msgtype, sdkfileid, md5sum});
                 }
             }
+    
+            // 新增：生成记录数日志
+            logger.info(String.format("生成媒体文件清单: 总记录=%d, 去重后记录=%d", totalRecords, processedMd5Sums.size()));
             return true;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
@@ -781,84 +772,140 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
-        ExecutorService mainExecutor = Executors.newFixedThreadPool(10);
+        // 1. 检查文件存在性
+        File mediaFile = new File(mediaFilesPath);
+        if (!mediaFile.exists() || mediaFile.length() == 0) {
+            logger.severe("媒体文件清单不存在或为空: " + mediaFilesPath);
+            return false;
+        }
+    
+        // 2. 初始化线程池（动态线程数，根据任务量调整）
+        int coreThreads = 20; // 核心线程数
+        int maxThreads = 50;  // 最大线程数
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+            coreThreads,
+            maxThreads,
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(1000)
+        );
+    
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
-        AtomicInteger totalMediaFiles = new AtomicInteger(0);
+        List<String> allTasks = new ArrayList<>(); // 记录所有任务标识（用于失败重试）
     
-        // 创建定时进度报告
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        scheduler.scheduleAtFixedRate(() -> {
-            int total = totalMediaFiles.get();
-            int success = successCount.get();
-            int failed = failureCount.get();
-            int remaining = total - (success + failed);
-            logger.info(String.format("[媒体下载进度] 总数: %d, 成功: %d, 失败: %d, 剩余: %d",
-                    total, success, failed, remaining));
-        }, 1, 1, TimeUnit.MINUTES);
+        // 3. 分批次处理（每批次1000条）
+        int batchSize = 1000;
+        List<List<String>> batches = loadAndBatchMediaRecords(mediaFilesPath, batchSize);
+        logger.info("媒体文件分批次处理，总批次: " + batches.size());
     
-        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(mediaFilesPath))
-                .withCSVParser(new CSVParserBuilder().build())
-                .build()) {
+        for (int batchIndex = 0; batchIndex < batches.size(); batchIndex++) {
+            List<String> batch = batches.get(batchIndex);
+            logger.info(String.format("处理批次 %d/%d, 任务数: %d", 
+                batchIndex + 1, batches.size(), batch.size()));
     
-            // 跳过表头
-            csvReader.readNext();
-    
-            String[] record;
-            while ((record = csvReader.readNext()) != null) {
-                if (record.length < 3) {
-                    logger.warning("无效的CSV记录: " + Arrays.toString(record));
-                    continue;
-                }
-    
-                String msgtype = record[0].trim();
-                String sdkfileid = record[1].trim();
-                String md5sum = record[2].trim();
-    
-                if (!isValidMsgType(msgtype) || StringUtils.isBlank(sdkfileid) || StringUtils.isBlank(md5sum)) {
-                    logger.warning("跳过无效记录: " + Arrays.toString(record));
-                    continue;
-                }
-    
-                totalMediaFiles.incrementAndGet();
-    
-                mainExecutor.submit(() -> {
+            CountDownLatch batchLatch = new CountDownLatch(batch.size());
+            for (String taskId : batch) {
+                executor.submit(() -> {
                     try {
-                        downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
+                        // 4. 带重试的任务执行
+                        executeTaskWithRetry(sdk, taskId, 3); // 最大重试3次
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         failureCount.incrementAndGet();
-                        logger.severe("媒体文件下载失败: " + md5sum + " - " + e.getMessage());
-                        saveFailedRecordsToCSV("DOWNLOAD_FAILURE", md5sum, -1);
+                        logger.severe("任务失败: " + taskId + " - " + e.getMessage());
+                        saveFailedRecordsToCSV("FAILED", taskId);
+                    } finally {
+                        batchLatch.countDown();
                     }
                 });
             }
     
-            mainExecutor.shutdown();
-            if (!mainExecutor.awaitTermination(2, TimeUnit.HOURS)) {
-                logger.warning("部分媒体文件下载任务超时");
+            // 5. 批次超时控制（每批次最多30分钟）
+            if (!batchLatch.await(30, TimeUnit.MINUTES)) {
+                logger.warning("批次 " + batchIndex + " 超时，剩余任务: " + batchLatch.getCount());
             }
+        }
     
-            // 关闭定时任务
-            scheduler.shutdown();
-            try {
-                if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
-                    scheduler.shutdownNow();
+        // 6. 动态计算总超时时间并关闭线程池
+        long totalTimeout = calculateTotalTimeout(batches.size(), batchSize);
+        executor.shutdown();
+        if (!executor.awaitTermination(totalTimeout, TimeUnit.MINUTES)) {
+            List<Runnable> pendingTasks = executor.shutdownNow();
+            logger.severe("全局超时，强制关闭剩余任务: " + pendingTasks.size());
+        }
+    
+        logger.info(String.format("媒体下载完成: 成功=%d, 失败=%d", 
+            successCount.get(), failureCount.get()));
+        return failureCount.get() == 0;
+    }
+
+    // ------------ 辅助方法 ------------
+    /**
+     * 加载媒体文件记录并分批次
+     */
+    private static List<List<String>> loadAndBatchMediaRecords(String mediaFilesPath, int batchSize) {
+        List<List<String>> batches = new ArrayList<>();
+        List<String> currentBatch = new ArrayList<>();
+    
+        try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
+            csvReader.readNext(); // 跳过表头
+            String[] record;
+            while ((record = csvReader.readNext()) != null) {
+                if (record.length < 3) continue;
+                String taskId = String.join("|", record[0], record[1], record[2]); // 格式: msgtype|sdkfileid|md5sum
+                currentBatch.add(taskId);
+                if (currentBatch.size() >= batchSize) {
+                    batches.add(currentBatch);
+                    currentBatch = new ArrayList<>();
                 }
-            } catch (InterruptedException e) {
-                scheduler.shutdownNow();
             }
-    
-            logger.info(String.format("媒体文件下载完成！成功: %d, 失败: %d",
-                    successCount.get(), failureCount.get()));
-            return failureCount.get() == 0;
+            if (!currentBatch.isEmpty()) batches.add(currentBatch);
         } catch (Exception e) {
-            logger.severe("处理媒体文件清单失败: " + e.getMessage());
-            return false;
-        } finally {
-            if (!scheduler.isShutdown()) {
-                scheduler.shutdownNow();
+            logger.severe("加载媒体文件清单失败: " + e.getMessage());
+        }
+        return batches;
+    }
+    
+    /**
+     * 带重试的任务执行
+     */
+    private static void executeTaskWithRetry(long sdk, String taskId, int maxRetries) {
+        String[] parts = taskId.split("\\|");
+        String msgtype = parts[0], sdkfileid = parts[1], md5sum = parts[2];
+        int retryCount = 0;
+    
+        while (retryCount <= maxRetries) {
+            try {
+                logger.fine("开始下载: " + taskId + " (重试次数=" + retryCount + ")");
+                downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
+                logger.fine("下载成功: " + taskId);
+                return;
+            } catch (Exception e) {
+                retryCount++;
+                if (retryCount > maxRetries) {
+                    throw new RuntimeException("超过最大重试次数", e);
+                }
+                sleepExponentialBackoff(retryCount); // 指数退避等待
             }
+        }
+    }
+    
+    /**
+     * 动态计算总超时时间（公式: 批次数量 * 每批次超时30分钟 + 缓冲时间30分钟）
+     */
+    private static long calculateTotalTimeout(int batchCount, int batchSize) {
+        return (batchCount * 30L) + 30; // 总超时 = 批次数量 * 30分钟 + 30分钟缓冲
+    }
+    
+    /**
+     * 指数退避等待（避免重试风暴）
+     */
+    private static void sleepExponentialBackoff(int retryCount) {
+        try {
+            long sleepTime = (long) Math.pow(2, retryCount) * 1000; // 2^retryCount 秒
+            Thread.sleep(sleepTime);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
