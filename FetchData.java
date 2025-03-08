@@ -1050,11 +1050,11 @@ public class FetchData {
             int retryCount, long baseDelayMs) {
         if (e.getStatusCode() == 10001) { // 网络错误
             long delay = calculateBackoffDelay(retryCount, baseDelayMs);
-            logger.warning("网络波动[" + taskId + "] 等待 " + delay/1000 + "秒后重试...");
+            logger.warning("网络波动[" + taskId + "] 等待 " + delay / 1000 + "秒后重试...");
             try {
                 Thread.sleep(delay);
             } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
+                Thread.currentThread().interrupt(); // 恢复中断状态
                 logger.warning("休眠被中断: " + ex.getMessage());
             }
         } else { // 其他错误
@@ -1062,9 +1062,15 @@ public class FetchData {
             if (retryCount >= 3) {
                 throw new RuntimeException("超过最大重试次数");
             }
-            Thread.sleep(5000);
+            try {
+                Thread.sleep(5000); // 将 Thread.sleep 包裹在 try-catch 块中
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt(); // 恢复中断状态
+                logger.warning("休眠被中断: " + ex.getMessage());
+            }
         }
     }
+
     private static long calculateBackoffDelay(int retryCount, long baseDelayMs) {
         long maxDelay = 10 * 60 * 1000; // 10分钟上限
         long delay = (long) (baseDelayMs * Math.pow(2, retryCount));
