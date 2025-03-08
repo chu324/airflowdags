@@ -1011,7 +1011,13 @@ public class FetchData {
                 // 网络可达性检测
                 while (!isNetworkAvailable()) {
                     logger.warning("网络不可用[" + taskId + "] 等待恢复...");
-                    Thread.sleep(60000);
+                    try {
+                        Thread.sleep(60000);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt(); // 恢复中断状态
+                        logger.warning("等待网络恢复时被中断: " + ex.getMessage());
+                        break; // 退出循环或根据业务逻辑处理
+                    }
                 }
     
                 logger.info("开始下载: " + taskId + " (重试次数=" + retryCount + ")");
@@ -1035,11 +1041,16 @@ public class FetchData {
     }
 
     private static void handleSdkException(SdkException e, String taskId, 
-            int retryCount, long baseDelayMs) throws InterruptedException {
+            int retryCount, long baseDelayMs) {
         if (e.getStatusCode() == 10001) { // 网络错误
             long delay = calculateBackoffDelay(retryCount, baseDelayMs);
             logger.warning("网络波动[" + taskId + "] 等待 " + delay/1000 + "秒后重试...");
-            Thread.sleep(delay); // 这里可能会抛出 InterruptedException
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                logger.warning("休眠被中断: " + ex.getMessage());
+            }
         } else { // 其他错误
             logger.severe("SDK错误[" + taskId + "] 代码=" + e.getStatusCode());
             if (retryCount >= 3) {
