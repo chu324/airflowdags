@@ -60,6 +60,23 @@ public class FetchData {
     private static final String s3BucketName = "175826060701-tprdevsftp-sftp-dev-cn-north-1"; // raw 和 curated 文件
     private static final String mediaS3BucketName = "175826060701-eds-qa-cn-north-1"; // 媒体文件
 
+    private static final S3Client s3Client = S3Client.builder()
+        .credentialsProvider(DefaultCredentialsProvider.create())
+        .region(Region.CN_NORTH_1)
+        .overrideConfiguration(c -> c
+            .retryPolicy(RetryPolicy.builder()
+                .numRetries(3)
+                .backoffStrategy(BackoffStrategy.defaultThrottlingStrategy())
+                .retryCondition(RetryCondition.retryOnStatusCode(403, 429, 500, 503))
+                .build()
+            )
+            .apiCallTimeout(Duration.ofSeconds(30))  // 添加超时控制
+        )
+        .httpClientBuilder(UrlConnectionHttpClient.builder()
+            .maxConcurrency(50)  // 控制最大并发连接数
+        )
+        .build();
+
     // 定义 raw 文件路径
     private static String rawFilePath = null;
 
@@ -1110,39 +1127,43 @@ public class FetchData {
         }
     }
 
-    private static void sendSNSErrorMessage(String message) {
-        // SNS Topic ARN
-        String snsTopicArn = "arn:aws-cn:sns:cn-north-1:175826060701:wecom_api_connection_alert_notification";
-
-        // 创建 SNS 客户端
-        SnsClient snsClient = SnsClient.builder()
-            .credentialsProvider(DefaultCredentialsProvider.builder().build()) // 使用 IAM Role
-            .region(Region.CN_NORTH_1) // 设置区域
-            .build();
-
-        try {
-            // 发布消息到 SNS Topic
-            PublishRequest request = PublishRequest.builder()
-                .topicArn(snsTopicArn)
-                .subject("任务报警: GetChatData 持续失败")
-                .message(message)
-                .build();
-
-            PublishResponse result = snsClient.publish(request);
-            logger.info("SNS 报警消息已发送，MessageId: " + result.messageId());
-        } catch (SnsException e) {
-            logger.severe("发送 SNS 报警消息失败: " + e.getMessage());
-        } finally {
-            snsClient.close(); // 关闭 SNS 客户端
+    private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
+        final int MAX_RETRIES = 3;
+        int attempt = 0;
+        
+        while (attempt <= MAX_RETRIES) {
+            try {
+                // ✅ 使用单例客户端
+                s3Client.putObject(
+                    PutObjectRequest.builder()
+                        .bucket(s3BucketName)
+                        .key(s3Key)
+                        .build(),
+                    Paths.get(filePath)
+                );
+                logger.info("文件上传成功: " + s3Key);
+                return;
+            } catch (S3Exception e) {
+                if (e.statusCode() == 503 || e.awsErrorDetails().errorCode().contains("SlowDown")) {
+                    attempt++;
+                    long delay = calculateExponentialBackoff(attempt); // 退避算法
+                    logger.warning("触发速率限制，第 " + attempt + " 次重试，延迟 " + delay + "ms");
+                    Thread.sleep(delay);
+                } else {
+                    logger.severe("S3上传致命错误: " + e.awsErrorDetails().errorMessage());
+                    throw e;
+                }
+            } catch (Exception e) {
+                logger.severe("未知上传错误: " + e.getMessage());
+                throw new RuntimeException(e);
+            }
         }
+        throw new S3Exception("上传失败，超过最大重试次数", null);
     }
 
-    private static void appendToRawFile(String content) {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(rawFilePath, true))) {
-            writer.write(content);
-            writer.newLine();
-        } catch (IOException e) {
-            logger.severe("追加数据到 raw 文件失败: " + e.getMessage());
-        }
+    private static long calculateExponentialBackoff(int attempt) {
+        long baseDelay = 1000; // 1秒
+        long maxDelay = 10000; // 10秒
+        long delay = (long) (baseDelay * Math.pow(2, attempt));
+        return Math.min(delay, maxDelay) + new Random().nextInt(1000); // 添加随机抖动
     }
-}
