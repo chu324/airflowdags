@@ -796,7 +796,7 @@ public class FetchData {
     
             // 上传到 S3
             String s3Key = getMediaS3Key(msgtype, md5sum);
-            uploadFileToS3(finalFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+            (finalFile.getAbsolutePath(), mediaS3BucketName, s3Key);
         } catch (Exception e) {
             logger.severe("媒体文件处理失败: " + e.getMessage());
             e.printStackTrace(); // 打印堆栈信息
@@ -1017,14 +1017,14 @@ public class FetchData {
             String rawZipFilePath = compressFile(rawFilePath, "wecom_chat_" + taskDateStr + ".zip");
             String rawS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/wecom_chat_" + taskDateStr + ".zip";
             logger.info("开始上传 raw 文件到 S3: " + rawS3Key);
-            uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
+            (rawZipFilePath, s3BucketName, rawS3Key);
             logger.info("raw 文件上传完成: " + rawS3Key);
     
             // 压缩并上传 curated 文件
             String curatedZipFilePath = compressFile(curatedFilePath, "chat_" + taskDateStr + ".zip");
             String curatedS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/chat_" + taskDateStr + ".zip";
             logger.info("开始上传 curated 文件到 S3: " + curatedS3Key);
-            uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
+            (curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
     
             // 生成 userid_mapping_yyyymmdd.csv 文件的路径
@@ -1034,7 +1034,7 @@ public class FetchData {
             // String mappingZipFilePath = compressFile(mappingFilePath, "userid_mapping_" + taskDateStr + ".zip");
             // String mappingS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/userid_mapping_" + taskDateStr + ".zip";
             // logger.info("开始上传 userid_mapping 文件到 S3: " + mappingS3Key);
-            // uploadFileToS3(mappingZipFilePath, s3BucketName, mappingS3Key);
+            // (mappingZipFilePath, s3BucketName, mappingS3Key);
             // logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
     
             // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
@@ -1125,9 +1125,16 @@ public class FetchData {
             } catch (S3Exception e) {
                 if (e.statusCode() == 503 || e.awsErrorDetails().errorCode().contains("SlowDown")) {
                     attempt++;
-                    long delay = calculateExponentialBackoff(attempt); // 退避算法
+                    long delay = calculateExponentialBackoff(attempt);
                     logger.warning("触发速率限制，第 " + attempt + " 次重试，延迟 " + delay + "ms");
-                    Thread.sleep(delay);
+                    try {
+                        Thread.sleep(delay);
+                    } catch (InterruptedException ie) {
+                        // 恢复中断状态并退出
+                        Thread.currentThread().interrupt();
+                        logger.severe("上传线程被中断: " + ie.getMessage());
+                        throw new RuntimeException("上传任务被中断", ie);
+                    }
                 } else {
                     logger.severe("S3上传致命错误: " + e.awsErrorDetails().errorMessage());
                     throw e;
@@ -1137,10 +1144,7 @@ public class FetchData {
                 throw new RuntimeException(e);
             }
         }
-        throw S3Exception.builder()
-        .message("上传失败，超过最大重试次数")
-        .statusCode(500)
-        .build();
+        throw new RuntimeException("上传失败，超过最大重试次数");
     }
 
     private static long calculateExponentialBackoff(int attempt) {
