@@ -1010,15 +1010,6 @@ public class FetchData {
             // uploadFileToS3(mappingZipFilePath, s3BucketName, mappingS3Key);
             // logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
     
-            // 上传 failed_records 文件到 S3
-            String failedRecordsFilePath = curatedFilePath.replace("chat_", "failed_records_");
-            if (new File(failedRecordsFilePath).exists()) {
-                String failedRecordsS3Key = "rejected/wecom_chat/" + taskDateStr + "/failed_records_" + taskDateStr + ".csv";
-                logger.info("开始上传 failed_records 文件到 S3: " + failedRecordsS3Key);
-                uploadFileToS3(failedRecordsFilePath, "175826060701-eds-qa-cn-north-1", failedRecordsS3Key);
-                logger.info("failed_records 文件上传完成: " + failedRecordsS3Key);
-            }
-    
             // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
             deleteDirectoryContents("/home/ec2-user/wecom_integration/data/raw"); // 清空 raw 目录下的内容
             deleteDirectoryContents("/home/ec2-user/wecom_integration/data/curated"); // 清空 curated 目录下的内容
@@ -1146,14 +1137,6 @@ public class FetchData {
         }
     }
 
-    private static void saveFailedRecord(String taskId, String errorType, int retCode) {
-        String failedRecordsPath = curatedFilePath.replace("chat_", "failed_records_");
-        try (CSVWriter writer = new CSVWriter(new FileWriter(failedRecordsPath, true))) {
-            writer.writeNext(new String[]{taskId, errorType, String.valueOf(retCode)});
-        } catch (Exception e) {
-            logger.severe("保存失败记录失败: " + e.getMessage());
-        }
-    }
     private static void appendToRawFile(String content) {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(rawFilePath, true))) {
             writer.write(content);
