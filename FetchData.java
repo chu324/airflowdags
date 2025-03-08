@@ -705,7 +705,14 @@ public class FetchData {
         File tempFile = null;
     
         try {
-            logger.info("开始下载媒体文件: sdkfileid=" + sdkfileid + ", md5sum=" + md5sum);
+            logger.info("Attempting to download media - sdkfileid: " + sdkfileid 
+                       + " | md5sum: " + md5sum 
+                       + " | msgtype: " + msgtype);
+            
+            // 调用SDK前校验sdkfileid
+            if (sdkfileid == null || sdkfileid.isEmpty()) {
+                throw new IllegalArgumentException("Invalid sdkfileid");
+            }
             // 创建临时文件
             tempFile = File.createTempFile(md5sum + "_", ".tmp");
             if (!tempFile.exists()) {
