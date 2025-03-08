@@ -1167,3 +1167,4 @@ public class FetchData {
         long delay = (long) (baseDelay * Math.pow(2, attempt));
         return Math.min(delay, maxDelay) + new Random().nextInt(1000); // 添加随机抖动
     }
+}
