@@ -773,9 +773,6 @@ public class FetchData {
         // 初始化原子计数器
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
-        
-        // 加载历史未完成任务
-        loadPendingTasks(sdk, successCount, failureCount);
     
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
@@ -786,10 +783,19 @@ public class FetchData {
             return false;
         }
     
+        // 生成媒体文件清单
+        if (!generateMediaFilesCSV(curatedFilePath, mediaFilesPath)) {
+            logger.severe("生成媒体文件清单失败");
+            return false;
+        }
+    
         // 加载所有媒体记录（包含历史未完成任务）
         List<String> allTasks = new ArrayList<>(loadAllMediaRecords(mediaFilesPath));
         int totalTasks = allTasks.size();
         logger.info("总媒体文件下载任务数: " + totalTasks + " (含历史未完成任务)");
+    
+        // 加载历史未完成任务
+        loadPendingTasks(sdk, successCount, failureCount);
     
         // 进度监控线程（每分钟打印）
         ScheduledExecutorService progressScheduler = Executors.newSingleThreadScheduledExecutor();
@@ -812,18 +818,18 @@ public class FetchData {
                 } catch (Exception e) {
                     failureCount.incrementAndGet();
                     logger.severe("任务提交失败: " + taskId + " - " + e.getMessage());
-                    savePendingTask(taskId); // 持久化失败任务
+                    savePendingTask(taskId, "TASK_SUBMIT_FAILED", -1); // 保存失败任务
                 }
             });
         }
     
         // 等待所有任务完成（带超时机制）
         boolean finalStatus = waitForCompletion(totalTasks, successCount, failureCount);
-        
+    
         // 关闭资源
         progressScheduler.shutdown();
         networkRetryExecutor.shutdown();
-        
+    
         return finalStatus;
     }
 
@@ -903,19 +909,21 @@ public class FetchData {
     }
 
 
-    private static synchronized void savePendingTask(String taskId) {
+    private static synchronized void savePendingTask(String taskId, String errorType, int retCode) {
         try {
             Path path = Paths.get(PENDING_TASKS_FILE);
-            Files.write(path, (taskId + "\n").getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            String record = String.join("|", taskId, errorType, String.valueOf(retCode)); // 新增失败原因和错误码
+            Files.write(path, (record + "\n").getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             logger.info("任务保存至: " + path.toAbsolutePath());
         } catch (IOException e) {
             logger.severe("保存待处理任务失败: " + e.getMessage());
         }
     }
+
     private static synchronized void removePendingTask(String taskId) {
         try {
             List<String> lines = Files.readAllLines(Paths.get(PENDING_TASKS_FILE));
-            lines.removeIf(line -> line.equals(taskId));
+            lines.removeIf(line -> line.startsWith(taskId + "|")); // 根据任务 ID 匹配并移除
             Files.write(Paths.get(PENDING_TASKS_FILE), lines);
         } catch (IOException e) {
             logger.severe("移除已完成任务失败: " + e.getMessage());
@@ -923,14 +931,15 @@ public class FetchData {
     }
 
     private static void loadPendingTasks(long sdk, AtomicInteger successCount, AtomicInteger failureCount) {
-        // 修改后的方法实现
         if (!Files.exists(Paths.get(PENDING_TASKS_FILE))) return;
-        
+    
         try {
             List<String> tasks = Files.readAllLines(Paths.get(PENDING_TASKS_FILE));
             logger.info("发现未完成任务数: " + tasks.size());
-            
-            for (String taskId : tasks) {
+    
+            for (String task : tasks) {
+                String[] parts = task.split("\\|");
+                String taskId = parts[0]; // 任务 ID 是第一部分
                 networkRetryExecutor.submit(() -> {
                     logger.info("提交下载任务: " + taskId);
                     executeTaskWithRetry(sdk, taskId, successCount, failureCount);
@@ -1000,7 +1009,6 @@ public class FetchData {
         long baseDelayMs = 1000;
     
         while (true) {
-            // 关键修改：在每次重试开始时打印日志
             logger.info("开始第 " + (retryCount + 1) + " 次重试: " + taskId);
     
             try {
@@ -1016,57 +1024,47 @@ public class FetchData {
                 // 任务成功
                 successCount.incrementAndGet();
                 removePendingTask(taskId);
-                logger.info("重试成功: taskId=" + taskId); // <--- 成功日志
+                logger.info("重试成功: taskId=" + taskId);
                 return; // 任务成功，退出循环
     
             } catch (SdkException e) {
-                // 关键修改：打印错误码和重试次数
-                logger.warning("捕获 SDK 异常: retcode=" + e.getStatusCode() + 
-                    ", 当前重试次数=" + retryCount + 
-                    ", 错误信息: " + e.getMessage());
-    
-                // 处理异常并递增重试次数
+                // 处理 SDK 异常
+                logger.warning("捕获 SDK 异常: retcode=" + e.getStatusCode() + ", 当前重试次数=" + retryCount + ", 错误信息: " + e.getMessage());
                 handleSdkException(e, taskId, retryCount, baseDelayMs);
-                retryCount++; // <--- 明确递增
+                retryCount++;
     
             } catch (Exception e) {
                 // 任务失败
                 failureCount.incrementAndGet();
-                logger.severe("重试失败: taskId=" + taskId + ", 累计重试次数=" + retryCount); // <--- 失败日志
-                savePendingTask(taskId); // 保存失败任务
-                saveFailedRecord(taskId, "FATAL_ERROR", -1);
+                logger.severe("重试失败: taskId=" + taskId + ", 累计重试次数=" + retryCount);
+                savePendingTask(taskId, "FATAL_ERROR", -1); // 保存失败任务
                 return; // 任务失败，退出循环
             }
         }
     }
 
-    private static void handleSdkException(SdkException e, String taskId, 
-            int retryCount, long baseDelayMs) {
+    private static void handleSdkException(SdkException e, String taskId, int retryCount, long baseDelayMs) {
         int statusCode = e.getStatusCode();
-        // 明确打印错误码和重试策略
-        logger.warning("处理 SDK 异常: taskId=" + taskId + 
-            ", retcode=" + statusCode + 
-            ", 已重试次数=" + retryCount);
+        logger.warning("处理 SDK 异常: taskId=" + taskId + ", retcode=" + statusCode + ", 已重试次数=" + retryCount);
     
-        if (statusCode == 10001) { 
+        if (statusCode == 10001) {
             // 网络波动，无限重试
             long delay = calculateBackoffDelay(retryCount, baseDelayMs);
-            logger.warning("网络波动重试: taskId=" + taskId + 
-                ", 等待 " + delay/1000 + "秒后重试...");
+            logger.warning("网络波动重试: taskId=" + taskId + ", 等待 " + delay / 1000 + "秒后重试...");
             try {
                 Thread.sleep(delay);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 logger.severe("重试休眠被中断: " + ex.getMessage());
             }
-            return; // 退出方法，让外部循环继续
         } else {
             // 其他错误码直接抛出异常，不再重试
-            logger.severe("不可重试错误: retcode=" + statusCode + 
-                ", 错误信息: " + e.getMessage());
+            logger.severe("不可重试错误: retcode=" + statusCode + ", 错误信息: " + e.getMessage());
+            savePendingTask(taskId, "SDK_ERROR", statusCode); // 保存失败任务
             throw new RuntimeException("非重试错误: retcode=" + statusCode);
         }
     }
+
     private static long calculateBackoffDelay(int retryCount, long baseDelayMs) {
         long maxDelay = 10 * 60 * 1000; // 10分钟上限
         long delay = (long) (baseDelayMs * Math.pow(2, retryCount));
