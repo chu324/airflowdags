@@ -1039,7 +1039,7 @@ public class FetchData {
         if (e.getStatusCode() == 10001) { // 网络错误
             long delay = calculateBackoffDelay(retryCount, baseDelayMs);
             logger.warning("网络波动[" + taskId + "] 等待 " + delay/1000 + "秒后重试...");
-            Thread.sleep(delay);
+            Thread.sleep(delay); // 这里可能会抛出 InterruptedException
         } else { // 其他错误
             logger.severe("SDK错误[" + taskId + "] 代码=" + e.getStatusCode());
             if (retryCount >= 3) {
@@ -1048,7 +1048,6 @@ public class FetchData {
             Thread.sleep(5000);
         }
     }
-
     private static long calculateBackoffDelay(int retryCount, long baseDelayMs) {
         long maxDelay = 10 * 60 * 1000; // 10分钟上限
         long delay = (long) (baseDelayMs * Math.pow(2, retryCount));
