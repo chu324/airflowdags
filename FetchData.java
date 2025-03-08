@@ -39,10 +39,14 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import java.util.logging.Level;
+import java.net.Socket;
+import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.URI;
+import java.lang.reflect.Field;
+
 import org.apache.commons.lang3.StringUtils;
 
 public class FetchData {
@@ -751,6 +755,13 @@ public class FetchData {
         return md5sum + extension;
     }
 
+    private static String getMediaS3Key(String msgtype, String md5sum) {
+        String safeMsgType = isValidMsgType(msgtype) ? msgtype : "unknown";
+        return String.format("raw/wecom_chat/media/%s/%s",
+            safeMsgType,
+            generateMediaFileName(md5sum, msgtype)
+        );
+    }
             
     /**
      * 生成媒体文件S3存储路径
@@ -764,7 +775,7 @@ public class FetchData {
         AtomicInteger failureCount = new AtomicInteger(0);
         
         // 加载历史未完成任务
-        loadPendingTasks(sdk);
+        loadPendingTasks(sdk, successCount, failureCount);
     
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
@@ -813,6 +824,19 @@ public class FetchData {
         networkRetryExecutor.shutdown();
         
         return finalStatus;
+    }
+
+    private static boolean validateMediaFilesCSV(String mediaFilesPath) {
+        try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
+            String[] header = csvReader.readNext();
+            return header != null && header.length >= 3 
+                && header[0].equals("msgtype") 
+                && header[1].equals("sdkfileid")
+                && header[2].equals("md5sum");
+        } catch (Exception e) {
+            logger.severe("验证媒体文件清单失败: " + e.getMessage());
+            return false;
+        }
     }
 
     private static boolean waitForCompletion(int totalTasks, AtomicInteger successCount, AtomicInteger failureCount) {
@@ -899,7 +923,8 @@ public class FetchData {
         }
     }
 
-    private static void loadPendingTasks(long sdk) {
+    private static void loadPendingTasks(long sdk, AtomicInteger successCount, AtomicInteger failureCount) {
+        // 修改后的方法实现
         if (!Files.exists(Paths.get(PENDING_TASKS_FILE))) return;
         
         try {
@@ -908,10 +933,10 @@ public class FetchData {
             
             for (String taskId : tasks) {
                 networkRetryExecutor.submit(() -> {
-                    executeTaskWithRetry(sdk, taskId);
+                    executeTaskWithRetry(sdk, taskId, successCount, failureCount);
                 });
             }
-            Files.delete(Paths.get(PENDING_TASKS_FILE)); // 加载后清空文件
+            Files.delete(Paths.get(PENDING_TASKS_FILE));
         } catch (IOException e) {
             logger.severe("加载待处理任务失败: " + e.getMessage());
         }
@@ -1215,17 +1240,14 @@ public class FetchData {
         }
     }
 
-    private static void saveFailedRecordsToCSV(String errorType, String sdkfileid, int retCode) {
-        String failedRecordsFilePath = curatedFilePath.replace("chat_", "failed_records_");
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(failedRecordsFilePath, true))) {
-            // 格式：错误类型（ret代码）,sdkfileid
-            writer.write(errorType + " (" + retCode + ")," + sdkfileid);
-            writer.newLine();
-        } catch (IOException e) {
-            logger.severe("记录失败文件信息失败: " + e.getMessage());
+    private static void saveFailedRecord(String taskId, String errorType, int retCode) {
+        String failedRecordsPath = curatedFilePath.replace("chat_", "failed_records_");
+        try (CSVWriter writer = new CSVWriter(new FileWriter(failedRecordsPath, true))) {
+            writer.writeNext(new String[]{taskId, errorType, String.valueOf(retCode)});
+        } catch (Exception e) {
+            logger.severe("保存失败记录失败: " + e.getMessage());
         }
     }
-
     private static void appendToRawFile(String content) {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(rawFilePath, true))) {
             writer.write(content);
