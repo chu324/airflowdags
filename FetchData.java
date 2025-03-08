@@ -942,29 +942,6 @@ public class FetchData {
         }
     }
 
-    private static boolean checkFinalStatus(int totalTasks) {
-        long start = System.currentTimeMillis();
-        while (true) {
-            long completed = successCount.get() + failureCount.get();
-            if (completed >= totalTasks) {
-                logger.info("所有任务处理完成");
-                return failureCount.get() == 0;
-            }
-
-            if (System.currentTimeMillis() - start > 86400_000) { // 24小时超时
-                logger.severe("全局超时，剩余未完成任务: " + (totalTasks - completed));
-                return false;
-            }
-
-            try {
-                Thread.sleep(60000); // 每分钟检查一次
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-    }
-
     /**
      * 加载所有媒体文件记录
      */
