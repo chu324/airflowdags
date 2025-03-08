@@ -517,8 +517,8 @@ public class FetchData {
                 .build();
              CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
     
-            // 注意：这里不再重复定义变量
-            csvWriter.writeNext(new String[]{msgtype, escapeCsvField(sdkfileid), escapeCsvField(md5sum)});
+            // 写入表头
+            csvWriter.writeNext(new String[]{"msgtype", "sdkfileid", "md5sum"});
     
             String[] record;
             while ((record = csvReader.readNext()) != null) {
@@ -543,6 +543,7 @@ public class FetchData {
                 }
     
                 if (processedMd5Sums.add(md5sum)) {
+                    // 将写入操作移到循环内部
                     csvWriter.writeNext(new String[]{msgtype, escapeCsvField(sdkfileid), escapeCsvField(md5sum)});
                 }
             }
