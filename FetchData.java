@@ -691,6 +691,7 @@ public class FetchData {
         File tempFile = null;
     
         try {
+            logger.info("开始下载媒体文件: sdkfileid=" + sdkfileid + ", md5sum=" + md5sum);
             // 创建临时文件
             tempFile = File.createTempFile(md5sum + "_", ".tmp");
             if (!tempFile.exists()) {
