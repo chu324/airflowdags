@@ -854,16 +854,10 @@ public class FetchData {
         }, 1, 1, TimeUnit.MINUTES);
     
         // 提交所有下载任务
-        for (String taskId : allTasks) {
+        for (JsonNode taskNode : allTasks) {
             networkRetryExecutor.submit(() -> {
-                try {
-                    logger.info("提交下载任务: " + taskId);
-                    executeTaskWithRetry(sdk, taskId, successCount, failureCount);
-                } catch (Exception e) {
-                    failureCount.incrementAndGet();
-                    logger.severe("任务提交失败: " + taskId + " - " + e.getMessage());
-                    savePendingTask(taskId, "TASK_SUBMIT_FAILED", -1); // 保存失败任务
-                }
+                logger.info("提交下载任务: " + taskNode.toString());
+                executeTaskWithRetry(sdk, taskNode, successCount, failureCount);
             });
         }
     
@@ -940,10 +934,10 @@ public class FetchData {
     }
 
 
-    private static synchronized void savePendingTask(String taskId, String errorType, int retCode) {
+    private static synchronized void savePendingTask(JsonNode taskNode, String errorType, int retCode) {
         try {
             Path path = Paths.get(PENDING_TASKS_FILE);
-            String record = String.join("|", taskId, errorType, String.valueOf(retCode)); // 新增失败原因和错误码
+            String record = String.join("|", taskNode.toString(), errorType, String.valueOf(retCode));
             Files.write(path, (record + "\n").getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             logger.info("任务保存至: " + path.toAbsolutePath());
         } catch (IOException e) {
@@ -968,13 +962,19 @@ public class FetchData {
             List<String> tasks = Files.readAllLines(Paths.get(PENDING_TASKS_FILE));
             logger.info("发现未完成任务数: " + tasks.size());
     
-            for (String task : tasks) {
-                String[] parts = task.split("\\|");
-                String taskId = parts[0]; // 任务 ID 是第一部分
-                networkRetryExecutor.submit(() -> {
-                    logger.info("提交下载任务: " + taskId);
-                    executeTaskWithRetry(sdk, taskId, successCount, failureCount);
-                });
+            for (String taskLine : tasks) {
+                String[] parts = taskLine.split("\\|");
+                if (parts.length < 1) continue;
+                String taskJsonStr = parts[0];
+                try {
+                    JsonNode taskNode = objectMapper.readTree(taskJsonStr);
+                    networkRetryExecutor.submit(() -> {
+                        logger.info("重新提交待处理任务: " + taskNode);
+                        executeTaskWithRetry(sdk, taskNode, successCount, failureCount);
+                    });
+                } catch (IOException e) {
+                    logger.severe("解析待处理任务失败: " + taskJsonStr);
+                }
             }
             Files.delete(Paths.get(PENDING_TASKS_FILE));
         } catch (IOException e) {
