@@ -669,26 +669,6 @@ public class FetchData {
         return Set.of("image", "voice", "video", "emotion", "file")
                  .contains(msgtype);
     }
-    
-    // 在下载逻辑中添加详细日志
-    private static void downloadMediaFile(long sdk, String sdkfileid, String md5sum, String msgtype) {
-        try {
-            logger.info("Attempting to download media - sdkfileid: " + sdkfileid 
-                       + " | md5sum: " + md5sum 
-                       + " | msgtype: " + msgtype);
-            
-            // 调用SDK前校验sdkfileid
-            if (sdkfileid == null || sdkfileid.isEmpty()) {
-                throw new IllegalArgumentException("Invalid sdkfileid");
-            }
-            
-            // 原有下载逻辑...
-        } catch (Exception e) {
-            logger.severe("Download failed for sdkfileid: " + sdkfileid 
-                         + " | Error: " + e.getMessage());
-            throw e;
-        }
-    }
 
     private static String escapeCsvField(String field) {
         if (field == null) {
