@@ -1031,6 +1031,12 @@ public class FetchData {
             } catch (SdkException e) {
                 handleSdkException(e, taskId, retryCount, baseDelayMs);
                 retryCount++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // 恢复中断状态
+                logger.warning("任务执行被中断: " + taskId + " - " + e.getMessage());
+                failureCount.incrementAndGet();
+                saveFailedRecord(taskId, "INTERRUPTED", -1);
+                return;
             } catch (Exception e) {
                 failureCount.incrementAndGet();
                 logger.severe("不可恢复错误: " + taskId + " - " + e.getMessage());
