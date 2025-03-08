@@ -978,13 +978,7 @@ public class FetchData {
         return batches;
     }
 
-    private static final ExecutorService networkRetryExecutor = 
-        Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r);
-            t.setDaemon(true);  // 设为守护线程
-            t.setName("NetworkRetryThread-" + t.getId());
-            return t;
-        });
+    private static final ExecutorService networkRetryExecutor = Executors.newFixedThreadPool(10); // 限制并发度为 10
 
     private static boolean isNetworkAvailable() {
         try (Socket socket = new Socket()) {
