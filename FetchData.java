@@ -261,7 +261,7 @@ public class FetchData {
     
         // 生成 media_files.csv 文件
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
-        boolean mediaFilesGenerated = generateMediaFilesCSV(curatedFilePath, mediaFilesPath);
+        boolean mediaFilesGenerated = generateMediaFilesJSON(curatedFilePath, mediaFilesPath);
         if (!mediaFilesGenerated) {
             logger.severe("生成 media_files.csv 文件失败");
         }
@@ -512,67 +512,106 @@ public class FetchData {
         return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
-    // 修改后的 generateMediaFilesCSV 方法
-    private static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
+    private static boolean generateMediaFilesJSON(String chatFilePath, String mediaFilesPath) {
+        int validCount = 0;
+        int skippedCount = 0;
+        
         try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath));
-             CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
-            
-            // 写入表头（新增 task_id_json 列）
-            csvWriter.writeNext(new String[]{"task_id_json"}); 
+             BufferedWriter jsonWriter = Files.newBufferedWriter(Paths.get(mediaFilesPath))) {
     
+            jsonWriter.write("["); // 开始JSON数组
+            
             String[] record;
+            boolean isFirst = true;
             while ((record = csvReader.readNext()) != null) {
-                if (record.length < 11) continue; // 确保列数足够
-                
+                if (record.length < 11) {
+                    skippedCount++;
+                    continue;
+                }
+    
                 String msgtype = record[7];
                 String sdkfileid = record[8];
                 String md5sum = record[9];
-                
-                // 构建JSON格式的任务ID
+    
+                // 有效性校验
+                if (!isValidMsgTypeForMedia(msgtype) || 
+                    !isValidSDKFileId(sdkfileid) || 
+                    !isValidMD5(md5sum)) {
+                    skippedCount++;
+                    continue;
+                }
+    
+                // 构建JSON对象
                 ObjectNode taskJson = objectMapper.createObjectNode();
                 taskJson.put("msgtype", msgtype);
                 taskJson.put("sdkfileid", sdkfileid);
                 taskJson.put("md5sum", md5sum);
+    
+                // 添加分隔逗号
+                if (!isFirst) {
+                    jsonWriter.write(",");
+                } else {
+                    isFirst = false;
+                }
                 
-                csvWriter.writeNext(new String[]{taskJson.toString()});
+                jsonWriter.write(taskJson.toString());
+                validCount++;
             }
+            
+            jsonWriter.write("]"); // 结束JSON数组
+            logger.info(String.format("生成媒体文件清单完成，有效记录=%d，跳过无效记录=%d", validCount, skippedCount));
             return true;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
             return false;
         }
     }
+
+    // 新增校验方法
+    private static boolean isValidMsgTypeForMedia(String msgtype) {
+        return Set.of("image", "voice", "video", "emotion", "file").contains(msgtype);
+    }
+
+    private static boolean isValidMD5(String md5sum) {
+        return StringUtils.isNotBlank(md5sum) && md5sum.matches("[a-fA-F0-9]{32}");
+    }
+
     
     // 修改后的任务处理逻辑
-    private static List<String> loadAllMediaRecords(String mediaFilesPath) {
-        List<String> allTasks = new ArrayList<>();
-        try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
-            csvReader.readNext(); // 跳过表头
-            String[] record;
-            while ((record = csvReader.readNext()) != null) {
-                if (record.length < 1) continue;
-                allTasks.add(record[0]); // 直接存储JSON字符串
+    private static List<JsonNode> loadAllMediaRecords(String mediaFilesPath) {
+        List<JsonNode> allTasks = new ArrayList<>();
+        try (InputStream inputStream = Files.newInputStream(Paths.get(mediaFilesPath))) {
+            JsonNode rootNode = objectMapper.readTree(inputStream);
+            if (rootNode.isArray()) {
+                for (JsonNode taskNode : rootNode) {
+                    allTasks.add(taskNode);
+                }
             }
+            logger.info("加载媒体文件记录数: " + allTasks.size());
         } catch (Exception e) {
             logger.severe("加载媒体文件清单失败: " + e.getMessage());
         }
         return allTasks;
     }
     
-    // 修改任务执行逻辑（在executeTaskWithRetry中）
-    private static void executeTaskWithRetry(long sdk, String taskJsonStr, AtomicInteger successCount, AtomicInteger failureCount) {
+    private static void executeTaskWithRetry(long sdk, JsonNode taskNode, AtomicInteger successCount, AtomicInteger failureCount) {
         try {
-            JsonNode taskNode = objectMapper.readTree(taskJsonStr);
             String msgtype = taskNode.path("msgtype").asText();
             String sdkfileid = taskNode.path("sdkfileid").asText();
             String md5sum = taskNode.path("md5sum").asText();
-            
-            // 调用下载逻辑
+    
+            // 二次校验（防御性编程）
+            if (!isValidMsgTypeForMedia(msgtype) || !isValidSDKFileId(sdkfileid) || !isValidMD5(md5sum)) {
+                logger.warning("跳过无效媒体记录: " + taskNode);
+                failureCount.incrementAndGet();
+                return;
+            }
+    
             downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
             successCount.incrementAndGet();
         } catch (Exception e) {
             failureCount.incrementAndGet();
-            logger.severe("JSON解析失败: " + taskJsonStr + " - " + e.getMessage());
+            logger.severe("媒体任务处理失败: " + taskNode + " - " + e.getMessage());
         }
     }
     
@@ -582,8 +621,9 @@ public class FetchData {
     }
 
     private static boolean isValidSDKFileId(String sdkfileid) {
-        return !StringUtils.isBlank(sdkfileid);
+        return StringUtils.isNotBlank(sdkfileid) && sdkfileid.length() >= 32;
     }
+
 
     private static String decryptData(long sdk, String encryptRandomKey, String encryptChatMsg) {
         try {
@@ -787,20 +827,14 @@ public class FetchData {
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
-        // 检查媒体清单文件有效性
-        if (!validateMediaFilesCSV(mediaFilesPath)) {
-            logger.severe("媒体文件清单格式错误或不存在");
-            return false;
-        }
-    
         // 生成媒体文件清单
-        if (!generateMediaFilesCSV(curatedFilePath, mediaFilesPath)) {
+        if (!generateMediaFilesJSON(curatedFilePath, mediaFilesPath)) {
             logger.severe("生成媒体文件清单失败");
             return false;
         }
     
         // 加载所有媒体记录（包含历史未完成任务）
-        List<String> allTasks = new ArrayList<>(loadAllMediaRecords(mediaFilesPath));
+        List<JsonNode> allTasks = loadAllMediaRecords(mediaFilesPath);
         int totalTasks = allTasks.size();
         logger.info("总媒体文件下载任务数: " + totalTasks + " (含历史未完成任务)");
     
@@ -841,19 +875,6 @@ public class FetchData {
         networkRetryExecutor.shutdown();
     
         return finalStatus;
-    }
-
-    private static boolean validateMediaFilesCSV(String mediaFilesPath) {
-        try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
-            String[] header = csvReader.readNext();
-            return header != null && header.length >= 3 
-                && header[0].equals("msgtype") 
-                && header[1].equals("sdkfileid")
-                && header[2].equals("md5sum");
-        } catch (Exception e) {
-            logger.severe("验证媒体文件清单失败: " + e.getMessage());
-            return false;
-        }
     }
 
     private static boolean waitForCompletion(int totalTasks, AtomicInteger successCount, AtomicInteger failureCount) {
