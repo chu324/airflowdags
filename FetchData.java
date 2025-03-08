@@ -69,14 +69,12 @@ public class FetchData {
             .retryPolicy(RetryPolicy.builder()
                 .numRetries(3)
                 .backoffStrategy(BackoffStrategy.defaultThrottlingStrategy())
-                .retryCondition(RetryCondition.retryOnStatusCode(403, 429, 500, 503))
+                .retryCondition(RetryOnStatusCodeCondition.create(403, 429, 500, 503))
                 .build()
             )
             .apiCallTimeout(Duration.ofSeconds(30))  // 添加超时控制
         )
-        .httpClientBuilder(UrlConnectionHttpClient.builder()
-            .maxConcurrency(50)  // 控制最大并发连接数
-        )
+        .httpClient(UrlConnectionHttpClient.create())
         .build();
 
     // 定义 raw 文件路径
@@ -1115,7 +1113,6 @@ public class FetchData {
         
         while (attempt <= MAX_RETRIES) {
             try {
-                // ✅ 使用单例客户端
                 s3Client.putObject(
                     PutObjectRequest.builder()
                         .bucket(s3BucketName)
