@@ -1098,36 +1098,6 @@ public class FetchData {
     }
 
     private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
-        // 创建凭证提供者
-        DefaultCredentialsProvider credentialsProvider = DefaultCredentialsProvider.create();
-
-        // 构建 S3 客户端
-        S3Client s3Client = S3Client.builder()
-            .credentialsProvider(credentialsProvider) // 使用凭证提供者
-            .region(Region.CN_NORTH_1) // 确保区域正确
-            .overrideConfiguration(config -> config.retryPolicy(
-                RetryPolicy.builder()
-                    .numRetries(5) // 最大重试次数
-                    .retryCondition(RetryOnStatusCodeCondition.create(403, 500)) // 在 403 或 500 时重试
-                    .build()
-            ))
-            .build();
-
-        try {
-            // 上传文件
-            s3Client.putObject(PutObjectRequest.builder()
-                .bucket(s3BucketName)
-                .key(s3Key)
-                .build(), Paths.get(filePath));
-        } catch (S3Exception e) {
-            // 失败时记录日志
-            logger.severe("上传文件到 S3 失败: " + e.awsErrorDetails().errorMessage());
-        } finally {
-            s3Client.close();
-        }
-    }
-
-    private static void uploadFileToS3(String filePath, String s3BucketName, String s3Key) {
         final int MAX_RETRIES = 3;
         int attempt = 0;
         
