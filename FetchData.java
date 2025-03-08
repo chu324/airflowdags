@@ -510,58 +510,67 @@ public class FetchData {
         return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
+    // 修改后的 generateMediaFilesCSV 方法
     private static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
-        final int REQUIRED_COLUMNS = 11;
-        Set<String> processedMd5Sums = new HashSet<>();
-        int totalRecords = 0;
-    
-        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath))
-                .withCSVParser(new CSVParserBuilder()
-                        .withQuoteChar('"')  // 确保引号字符正确
-                        .withEscapeChar('\\')  // 使用反斜杠作为转义字符
-                        .build())
-                .build();
+        try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath));
              CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
-    
-            // 写入表头
-            csvWriter.writeNext(new String[]{"msgtype", "sdkfileid", "md5sum"});
+            
+            // 写入表头（新增 task_id_json 列）
+            csvWriter.writeNext(new String[]{"task_id_json"}); 
     
             String[] record;
             while ((record = csvReader.readNext()) != null) {
-                totalRecords++;
-                if (record.length < REQUIRED_COLUMNS) {
-                    logger.warning("记录列数不足: 实际列数=" + record.length);
-                    continue;
-                }
-    
-                String msgtype = record[7].trim();
-                String sdkfileid = record[8].trim();
-                String md5sum = record[9].trim();
-    
-                if (!isValidMsgType(msgtype)) {
-                    logger.fine("跳过非媒体类型: " + msgtype);
-                    continue;
-                }
-    
-                if (StringUtils.isBlank(sdkfileid) || StringUtils.isBlank(md5sum)) {
-                    logger.warning("字段为空: msgtype=" + msgtype);
-                    continue;
-                }
-    
-                if (processedMd5Sums.add(md5sum)) {
-                    // 将写入操作移到循环内部
-                    csvWriter.writeNext(new String[]{msgtype, escapeCsvField(sdkfileid), escapeCsvField(md5sum)});
-                }
+                if (record.length < 11) continue; // 确保列数足够
+                
+                String msgtype = record[7];
+                String sdkfileid = record[8];
+                String md5sum = record[9];
+                
+                // 构建JSON格式的任务ID
+                ObjectNode taskJson = objectMapper.createObjectNode();
+                taskJson.put("msgtype", msgtype);
+                taskJson.put("sdkfileid", sdkfileid);
+                taskJson.put("md5sum", md5sum);
+                
+                csvWriter.writeNext(new String[]{taskJson.toString()});
             }
-    
-            logger.info(String.format("生成媒体文件清单: 总记录=%d, 去重后记录=%d", totalRecords, processedMd5Sums.size()));
             return true;
-        } catch (CsvValidationException e) {
-            logger.severe("CSV 文件格式错误: " + e.getMessage());
-            return false;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
             return false;
+        }
+    }
+    
+    // 修改后的任务处理逻辑
+    private static List<String> loadAllMediaRecords(String mediaFilesPath) {
+        List<String> allTasks = new ArrayList<>();
+        try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
+            csvReader.readNext(); // 跳过表头
+            String[] record;
+            while ((record = csvReader.readNext()) != null) {
+                if (record.length < 1) continue;
+                allTasks.add(record[0]); // 直接存储JSON字符串
+            }
+        } catch (Exception e) {
+            logger.severe("加载媒体文件清单失败: " + e.getMessage());
+        }
+        return allTasks;
+    }
+    
+    // 修改任务执行逻辑（在executeTaskWithRetry中）
+    private static void executeTaskWithRetry(long sdk, String taskJsonStr, AtomicInteger successCount, AtomicInteger failureCount) {
+        try {
+            JsonNode taskNode = objectMapper.readTree(taskJsonStr);
+            String msgtype = taskNode.path("msgtype").asText();
+            String sdkfileid = taskNode.path("sdkfileid").asText();
+            String md5sum = taskNode.path("md5sum").asText();
+            
+            // 调用下载逻辑
+            downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
+            successCount.incrementAndGet();
+        } catch (Exception e) {
+            failureCount.incrementAndGet();
+            logger.severe("JSON解析失败: " + taskJsonStr + " - " + e.getMessage());
         }
     }
     
@@ -639,40 +648,43 @@ public class FetchData {
         }
     }
 
-    private static String extractSeqFileId(JsonNode rootNode, String msgtype) {
-        // 定义包含 sdkfileid 的有效 msgtype 集合
-        Set<String> validMsgTypes = new HashSet<>(Arrays.asList(
-            "image", "voice", "video", "emotion", "file", "meeting_voice_call", "voip_doc_share"
-        ));
-
+    private static String extractSeqFileId(JsonNode decryptedRootNode, String msgtype) {
+        // 增加sdkfileid有效性校验
+        if (!validMsgTypeForMedia(msgtype)) return "";
+    
+        JsonNode msgTypeNode = decryptedRootNode.path(msgtype);
+        String sdkfileid = msgTypeNode.path("sdkfileid").asText("").trim();
+        
+        // 新增校验逻辑
+        if (sdkfileid.isEmpty() || sdkfileid.length() < 32) { // 根据实际格式调整校验规则
+            logger.warning("Invalid sdkfileid detected: " + sdkfileid);
+            return "";
+        }
+        return sdkfileid;
+    }
+    
+    private static boolean validMsgTypeForMedia(String msgtype) {
+        return Set.of("image", "voice", "video", "emotion", "file")
+                 .contains(msgtype);
+    }
+    
+    // 在下载逻辑中添加详细日志
+    private static void downloadMediaFile(long sdk, String sdkfileid, String md5sum, String msgtype) {
         try {
-            // 如果 msgtype 不在有效集合中，直接返回空字符串
-            if (!validMsgTypes.contains(msgtype)) {
-                return "";
+            logger.info("Attempting to download media - sdkfileid: " + sdkfileid 
+                       + " | md5sum: " + md5sum 
+                       + " | msgtype: " + msgtype);
+            
+            // 调用SDK前校验sdkfileid
+            if (sdkfileid == null || sdkfileid.isEmpty()) {
+                throw new IllegalArgumentException("Invalid sdkfileid");
             }
-
-            // 检查 msgtype 对应的节点是否存在
-            if (rootNode.has(msgtype)) {
-                JsonNode msgTypeNode = rootNode.path(msgtype);
-                // 检查 sdkfileid 字段是否存在且不为空
-                if (msgTypeNode.has("sdkfileid")) {
-                    String sdkfileid = msgTypeNode.path("sdkfileid").asText();
-                    if (sdkfileid != null && !sdkfileid.isEmpty()) {
-                        return sdkfileid;
-                    } else {
-                        logger.info("sdkfileid 字段为空: msgtype=" + msgtype);
-                    }
-                } else {
-                    logger.info("sdkfileid 字段缺失: msgtype=" + msgtype);
-                }
-            } else {
-                logger.info("msgtype 节点缺失: msgtype=" + msgtype);
-            }
-            // 如果 msgtype 节点或 sdkfileid 字段不存在，返回空字符串
-            return "";
+            
+            // 原有下载逻辑...
         } catch (Exception e) {
-            logger.severe("提取 sdkfileid 失败: " + e.getMessage());
-            return "";
+            logger.severe("Download failed for sdkfileid: " + sdkfileid 
+                         + " | Error: " + e.getMessage());
+            throw e;
         }
     }
 
@@ -960,126 +972,7 @@ public class FetchData {
         }
     }
 
-    /**
-     * 加载所有媒体文件记录
-     */
-    private static List<String> loadAllMediaRecords(String mediaFilesPath) {
-        List<String> allTasks = new ArrayList<>();
-        try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
-            csvReader.readNext(); // 跳过表头
-            String[] record;
-            while ((record = csvReader.readNext()) != null) {
-                if (record.length < 3) continue;
-                String taskId = String.join("|", record[0], record[1], record[2]); // 格式: msgtype|sdkfileid|md5sum
-                allTasks.add(taskId);
-            }
-        } catch (Exception e) {
-            logger.severe("加载媒体文件清单失败: " + e.getMessage());
-        }
-        return allTasks;
-    }
-
-    /**
-     * 将任务列表分批次
-     */
-    private static List<List<String>> batchMediaRecords(List<String> allTasks, int batchSize) {
-        List<List<String>> batches = new ArrayList<>();
-        List<String> currentBatch = new ArrayList<>();
-        for (String task : allTasks) {
-            currentBatch.add(task);
-            if (currentBatch.size() >= batchSize) {
-                batches.add(currentBatch);
-                currentBatch = new ArrayList<>();
-            }
-        }
-        if (!currentBatch.isEmpty()) batches.add(currentBatch);
-        return batches;
-    }
-
     private static final ExecutorService networkRetryExecutor = Executors.newFixedThreadPool(10); // 限制并发度为 10
-
-    private static boolean isNetworkAvailable() {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("qyapi.weixin.qq.com", 443), 5000);
-            return true;
-        } catch (IOException e) {
-            logger.warning("网络不可达，错误: " + e.getMessage());
-            return false;
-        }
-    }
-        
-    /**
-     * 带重试的任务执行
-     */
-    private static void executeTaskWithRetry(long sdk, String taskId, AtomicInteger successCount, AtomicInteger failureCount) {
-        String[] parts = taskId.split("\\|");
-        String msgtype = parts[0], sdkfileid = parts[1], md5sum = parts[2];
-        int retryCount = 0;
-        long baseDelayMs = 1000;
-    
-        while (true) {
-            logger.info("开始第 " + (retryCount + 1) + " 次重试: " + taskId);
-    
-            try {
-                // 网络可达性检测
-                while (!isNetworkAvailable()) {
-                    logger.warning("网络不可用[" + taskId + "] 等待恢复...");
-                    Thread.sleep(60000);
-                }
-    
-                logger.info("开始下载: " + taskId + " (重试次数=" + retryCount + ")");
-                downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
-    
-                // 任务成功
-                successCount.incrementAndGet();
-                removePendingTask(taskId);
-                logger.info("重试成功: taskId=" + taskId);
-                return; // 任务成功，退出循环
-    
-            } catch (SdkException e) {
-                // 处理 SDK 异常
-                logger.warning("捕获 SDK 异常: retcode=" + e.getStatusCode() + ", 当前重试次数=" + retryCount + ", 错误信息: " + e.getMessage());
-                handleSdkException(e, taskId, retryCount, baseDelayMs);
-                retryCount++;
-    
-            } catch (Exception e) {
-                // 任务失败
-                failureCount.incrementAndGet();
-                logger.severe("重试失败: taskId=" + taskId + ", 累计重试次数=" + retryCount);
-                savePendingTask(taskId, "FATAL_ERROR", -1); // 保存失败任务
-                e.printStackTrace(); // 打印堆栈信息
-                return; // 任务失败，退出循环
-            }
-        }
-    }
-
-    private static void handleSdkException(SdkException e, String taskId, int retryCount, long baseDelayMs) {
-        int statusCode = e.getStatusCode();
-        logger.warning("处理 SDK 异常: taskId=" + taskId + ", retcode=" + statusCode + ", 已重试次数=" + retryCount);
-    
-        if (statusCode == 10001) {
-            // 网络波动，无限重试
-            long delay = calculateBackoffDelay(retryCount, baseDelayMs);
-            logger.warning("网络波动重试: taskId=" + taskId + ", 等待 " + delay / 1000 + "秒后重试...");
-            try {
-                Thread.sleep(delay);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                logger.severe("重试休眠被中断: " + ex.getMessage());
-            }
-        } else {
-            // 其他错误码直接抛出异常，不再重试
-            logger.severe("不可重试错误: retcode=" + statusCode + ", 错误信息: " + e.getMessage());
-            savePendingTask(taskId, "SDK_ERROR", statusCode); // 保存失败任务
-            throw new RuntimeException("非重试错误: retcode=" + statusCode);
-        }
-    }
-
-    private static long calculateBackoffDelay(int retryCount, long baseDelayMs) {
-        long maxDelay = 10 * 60 * 1000; // 10分钟上限
-        long delay = (long) (baseDelayMs * Math.pow(2, retryCount));
-        return Math.min(delay, maxDelay);
-    }
 
     private static boolean compressAndUploadFilesToS3() {
         try {
