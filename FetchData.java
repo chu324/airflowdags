@@ -504,13 +504,16 @@ public class FetchData {
         return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
-    public static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
+    private static boolean generateMediaFilesCSV(String chatFilePath, String mediaFilesPath) {
         final int REQUIRED_COLUMNS = 11;
         Set<String> processedMd5Sums = new HashSet<>();
         int totalRecords = 0;
     
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath))
-                .withCSVParser(new CSVParserBuilder().build())
+                .withCSVParser(new CSVParserBuilder()
+                        .withQuoteChar('"')  // 确保引号字符正确
+                        .withEscapeChar('\\')  // 使用反斜杠作为转义字符
+                        .build())
                 .build();
              CSVWriter csvWriter = new CSVWriter(new FileWriter(mediaFilesPath))) {
     
@@ -543,9 +546,11 @@ public class FetchData {
                 }
             }
     
-            // 新增：生成记录数日志
             logger.info(String.format("生成媒体文件清单: 总记录=%d, 去重后记录=%d", totalRecords, processedMd5Sums.size()));
             return true;
+        } catch (CsvValidationException e) {
+            logger.severe("CSV 文件格式错误: " + e.getMessage());
+            return false;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
             return false;
@@ -793,9 +798,24 @@ public class FetchData {
         AtomicInteger failureCount = new AtomicInteger(0);
         List<String> allTasks = new ArrayList<>(); // 记录所有任务标识（用于失败重试）
     
+        // 加载所有任务
+        allTasks = loadAllMediaRecords(mediaFilesPath);
+        int totalTasks = allTasks.size();
+        logger.info("总媒体文件下载任务数: " + totalTasks);
+    
+        // 启动定时任务，每分钟打印一次进度
+        ScheduledExecutorService progressScheduler = Executors.newSingleThreadScheduledExecutor();
+        progressScheduler.scheduleAtFixedRate(() -> {
+            int completed = successCount.get() + failureCount.get();
+            logger.info(String.format(
+                "[下载进度] 总任务数: %d, 已完成: %d, 成功: %d, 失败: %d",
+                totalTasks, completed, successCount.get(), failureCount.get()
+            ));
+        }, 1, 1, TimeUnit.MINUTES); // 初始延迟 1 分钟，之后每 1 分钟执行一次
+    
         // 分批次处理（每批次1000条）
         int batchSize = 1000;
-        List<List<String>> batches = loadAndBatchMediaRecords(mediaFilesPath, batchSize);
+        List<List<String>> batches = batchMediaRecords(allTasks, batchSize);
         logger.info("媒体文件分批次处理，总批次: " + batches.size());
     
         for (int batchIndex = 0; batchIndex < batches.size(); batchIndex++) {
@@ -857,38 +877,50 @@ public class FetchData {
             return false;
         }
     
-        logger.info(String.format("媒体下载完成: 成功=%d, 失败=%d", 
-            successCount.get(), failureCount.get()));
+        // 关闭进度打印任务
+        progressScheduler.shutdown();
+    
+        logger.info(String.format("媒体下载完成: 总任务数=%d, 成功=%d, 失败=%d", 
+            totalTasks, successCount.get(), failureCount.get()));
         return failureCount.get() == 0;
     }
 
-    // ------------ 辅助方法 ------------
     /**
-     * 加载媒体文件记录并分批次
+     * 加载所有媒体文件记录
      */
-    private static List<List<String>> loadAndBatchMediaRecords(String mediaFilesPath, int batchSize) {
-        List<List<String>> batches = new ArrayList<>();
-        List<String> currentBatch = new ArrayList<>();
-    
+    private static List<String> loadAllMediaRecords(String mediaFilesPath) {
+        List<String> allTasks = new ArrayList<>();
         try (CSVReader csvReader = new CSVReader(new FileReader(mediaFilesPath))) {
             csvReader.readNext(); // 跳过表头
             String[] record;
             while ((record = csvReader.readNext()) != null) {
                 if (record.length < 3) continue;
                 String taskId = String.join("|", record[0], record[1], record[2]); // 格式: msgtype|sdkfileid|md5sum
-                currentBatch.add(taskId);
-                if (currentBatch.size() >= batchSize) {
-                    batches.add(currentBatch);
-                    currentBatch = new ArrayList<>();
-                }
+                allTasks.add(taskId);
             }
-            if (!currentBatch.isEmpty()) batches.add(currentBatch);
         } catch (Exception e) {
             logger.severe("加载媒体文件清单失败: " + e.getMessage());
         }
+        return allTasks;
+    }
+
+    /**
+     * 将任务列表分批次
+     */
+    private static List<List<String>> batchMediaRecords(List<String> allTasks, int batchSize) {
+        List<List<String>> batches = new ArrayList<>();
+        List<String> currentBatch = new ArrayList<>();
+        for (String task : allTasks) {
+            currentBatch.add(task);
+            if (currentBatch.size() >= batchSize) {
+                batches.add(currentBatch);
+                currentBatch = new ArrayList<>();
+            }
+        }
+        if (!currentBatch.isEmpty()) batches.add(currentBatch);
         return batches;
     }
-    
+        
     /**
      * 带重试的任务执行
      */
