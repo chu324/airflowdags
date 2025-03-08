@@ -824,25 +824,37 @@ public class FetchData {
             }
     
             // 批次超时控制（每批次最多30分钟）
-            if (!batchLatch.await(30, TimeUnit.MINUTES)) {
-                logger.warning("批次 " + batchIndex + " 超时，剩余任务: " + batchLatch.getCount());
-                // 记录超时任务
-                for (int i = 0; i < batchLatch.getCount(); i++) {
-                    saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+            try {
+                if (!batchLatch.await(30, TimeUnit.MINUTES)) {
+                    logger.warning("批次 " + batchIndex + " 超时，剩余任务: " + batchLatch.getCount());
+                    // 记录超时任务
+                    for (int i = 0; i < batchLatch.getCount(); i++) {
+                        saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+                    }
                 }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // Restore the interrupted status
+                logger.severe("线程在等待批次完成时被中断: " + e.getMessage());
+                return false;
             }
         }
     
         // 动态计算总超时时间并关闭线程池
         long totalTimeout = calculateTotalTimeout(batches.size(), batchSize);
         executor.shutdown();
-        if (!executor.awaitTermination(totalTimeout, TimeUnit.MINUTES)) {
-            List<Runnable> pendingTasks = executor.shutdownNow();
-            logger.severe("全局超时，强制关闭剩余任务: " + pendingTasks.size());
-            // 记录未完成任务
-            for (Runnable task : pendingTasks) {
-                saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+        try {
+            if (!executor.awaitTermination(totalTimeout, TimeUnit.MINUTES)) {
+                List<Runnable> pendingTasks = executor.shutdownNow();
+                logger.severe("全局超时，强制关闭剩余任务: " + pendingTasks.size());
+                // 记录未完成任务
+                for (Runnable task : pendingTasks) {
+                    saveFailedRecordsToCSV("TIMEOUT", "unknown_task", -1);
+                }
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // Restore the interrupted status
+            logger.severe("线程在等待线程池关闭时被中断: " + e.getMessage());
+            return false;
         }
     
         logger.info(String.format("媒体下载完成: 成功=%d, 失败=%d", 
@@ -917,7 +929,8 @@ public class FetchData {
             long sleepTime = (long) Math.pow(2, retryCount) * 1000; // 2^retryCount 秒
             Thread.sleep(sleepTime);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            Thread.currentThread().interrupt(); // Restore the interrupted status
+            logger.severe("线程在指数退避等待期间被中断: " + e.getMessage());
         }
     }
 
