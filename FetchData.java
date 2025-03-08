@@ -64,7 +64,7 @@ public class FetchData {
     // 定义 curated 文件路径
     private static String curatedFilePath = null;
 
-    private static final String PENDING_TASKS_FILE = "pending_media_tasks.log";
+    private static final String PENDING_TASKS_FILE = "/home/ec2-user/wecom_integration/logs/pending_media_tasks.log";
 
     // 定时任务
     private static ScheduledExecutorService scheduler;
@@ -807,6 +807,7 @@ public class FetchData {
         for (String taskId : allTasks) {
             networkRetryExecutor.submit(() -> {
                 try {
+                    logger.info("提交下载任务: " + taskId);
                     executeTaskWithRetry(sdk, taskId, successCount, failureCount);
                 } catch (Exception e) {
                     failureCount.incrementAndGet();
@@ -904,15 +905,13 @@ public class FetchData {
 
     private static synchronized void savePendingTask(String taskId) {
         try {
-            Files.write(Paths.get(PENDING_TASKS_FILE), 
-                (taskId + "\n").getBytes(), 
-                StandardOpenOption.CREATE, 
-                StandardOpenOption.APPEND);
+            Path path = Paths.get(PENDING_TASKS_FILE);
+            Files.write(path, (taskId + "\n").getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            logger.info("任务保存至: " + path.toAbsolutePath());
         } catch (IOException e) {
             logger.severe("保存待处理任务失败: " + e.getMessage());
         }
     }
-
     private static synchronized void removePendingTask(String taskId) {
         try {
             List<String> lines = Files.readAllLines(Paths.get(PENDING_TASKS_FILE));
@@ -933,6 +932,7 @@ public class FetchData {
             
             for (String taskId : tasks) {
                 networkRetryExecutor.submit(() -> {
+                    logger.info("提交下载任务: " + taskId);
                     executeTaskWithRetry(sdk, taskId, successCount, failureCount);
                 });
             }
@@ -999,14 +999,16 @@ public class FetchData {
     /**
      * 带重试的任务执行
      */
-    private static void executeTaskWithRetry(long sdk, String taskId,
-            AtomicInteger successCount, AtomicInteger failureCount) {
+    private static void executeTaskWithRetry(long sdk, String taskId, AtomicInteger successCount, AtomicInteger failureCount) {
         String[] parts = taskId.split("\\|");
         String msgtype = parts[0], sdkfileid = parts[1], md5sum = parts[2];
         int retryCount = 0;
         long baseDelayMs = 1000;
     
         while (true) {
+            // 关键修改：在每次重试开始时打印日志
+            logger.info("开始第 " + (retryCount + 1) + " 次重试: " + taskId);
+    
             try {
                 // 网络可达性检测
                 while (!isNetworkAvailable()) {
@@ -1016,49 +1018,61 @@ public class FetchData {
     
                 logger.info("开始下载: " + taskId + " (重试次数=" + retryCount + ")");
                 downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
-                
+    
+                // 任务成功
                 successCount.incrementAndGet();
                 removePendingTask(taskId);
-                logger.info("下载成功: " + taskId);
-                return;
-                
+                logger.info("重试成功: taskId=" + taskId); // <--- 成功日志
+                return; // 任务成功，退出循环
+    
             } catch (SdkException e) {
+                // 关键修改：打印错误码和重试次数
+                logger.warning("捕获 SDK 异常: retcode=" + e.getStatusCode() + 
+                    ", 当前重试次数=" + retryCount + 
+                    ", 错误信息: " + e.getMessage());
+    
+                // 处理异常并递增重试次数
                 handleSdkException(e, taskId, retryCount, baseDelayMs);
-                retryCount++;
+                retryCount++; // <--- 明确递增
+    
             } catch (Exception e) {
+                // 任务失败
                 failureCount.incrementAndGet();
-                logger.severe("不可恢复错误: " + taskId + " - " + e.getMessage());
+                logger.severe("重试失败: taskId=" + taskId + ", 累计重试次数=" + retryCount); // <--- 失败日志
+                savePendingTask(taskId); // 保存失败任务
                 saveFailedRecord(taskId, "FATAL_ERROR", -1);
-                return;
+                return; // 任务失败，退出循环
             }
         }
     }
 
     private static void handleSdkException(SdkException e, String taskId, 
             int retryCount, long baseDelayMs) {
-        if (e.getStatusCode() == 10001) { // 网络错误
+        int statusCode = e.getStatusCode();
+        // 明确打印错误码和重试策略
+        logger.warning("处理 SDK 异常: taskId=" + taskId + 
+            ", retcode=" + statusCode + 
+            ", 已重试次数=" + retryCount);
+    
+        if (statusCode == 10001) { 
+            // 网络波动，无限重试
             long delay = calculateBackoffDelay(retryCount, baseDelayMs);
-            logger.warning("网络波动[" + taskId + "] 等待 " + delay / 1000 + "秒后重试...");
+            logger.warning("网络波动重试: taskId=" + taskId + 
+                ", 等待 " + delay/1000 + "秒后重试...");
             try {
                 Thread.sleep(delay);
             } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt(); // 恢复中断状态
-                logger.warning("休眠被中断: " + ex.getMessage());
+                Thread.currentThread().interrupt();
+                logger.severe("重试休眠被中断: " + ex.getMessage());
             }
-        } else { // 其他错误
-            logger.severe("SDK错误[" + taskId + "] 代码=" + e.getStatusCode());
-            if (retryCount >= 3) {
-                throw new RuntimeException("超过最大重试次数");
-            }
-            try {
-                Thread.sleep(5000); // 将 Thread.sleep 包裹在 try-catch 块中
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt(); // 恢复中断状态
-                logger.warning("休眠被中断: " + ex.getMessage());
-            }
+            return; // 退出方法，让外部循环继续
+        } else {
+            // 其他错误码直接抛出异常，不再重试
+            logger.severe("不可重试错误: retcode=" + statusCode + 
+                ", 错误信息: " + e.getMessage());
+            throw new RuntimeException("非重试错误: retcode=" + statusCode);
         }
     }
-
     private static long calculateBackoffDelay(int retryCount, long baseDelayMs) {
         long maxDelay = 10 * 60 * 1000; // 10分钟上限
         long delay = (long) (baseDelayMs * Math.pow(2, retryCount));
