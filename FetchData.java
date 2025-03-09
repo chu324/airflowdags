@@ -285,9 +285,9 @@ public class FetchData {
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
         if (!mediaDownloadSuccess) {
-            logger.severe("部分媒体文件下载失败，但仍将继续上传 raw 和 curated 文件到 S3");
+            logger.severe("媒体文件下载失败率超过阈值");
+            //sendSNSErrorMessage("媒体文件下载失败率超过10%");
         }
-    
         // 阶段 4: 压缩并上传 raw 和 curated 文件到 S3
         if (!compressAndUploadFilesToS3()) {
             return false;
@@ -534,23 +534,19 @@ public class FetchData {
         return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
-    private static boolean generateMediaFilesJSON(String chatFilePath, String mediaFilesPath) {
+    /**
+     * 生成媒体文件清单JSON，返回有效任务数
+     */
+    private static int generateMediaFilesJSON(String chatFilePath, String mediaFilesPath) {
         int validCount = 0;
         int skippedCount = 0;
         int duplicateCount = 0;
-    
-        // 定义统计变量
-        Map<String, Integer> msgTypeCountMap = new HashMap<>();
-        AtomicInteger totalRecords = new AtomicInteger(0);
-    
-        // 使用 Set 来存储唯一的媒体任务标识
         Set<String> uniqueTaskKeys = new HashSet<>();
     
         try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath));
              BufferedWriter jsonWriter = Files.newBufferedWriter(Paths.get(mediaFilesPath))) {
     
-            jsonWriter.write("["); // 开始JSON数组
-    
+            jsonWriter.write("[");
             String[] record;
             boolean isFirst = true;
             while ((record = csvReader.readNext()) != null) {
@@ -563,63 +559,38 @@ public class FetchData {
                 String sdkfileid = record[8];
                 String md5sum = record[9];
     
-                // 有效性校验
-                if (!isValidMsgTypeForMedia(msgtype) ||
-                    !isValidSDKFileId(sdkfileid) ||
-                    !isValidMD5(md5sum)) {
+                if (!isValidMsgTypeForMedia(msgtype) || !isValidSDKFileId(sdkfileid) || !isValidMD5(md5sum)) {
                     skippedCount++;
                     continue;
                 }
     
-                // 生成唯一任务标识
                 String taskKey = msgtype + "|" + sdkfileid + "|" + md5sum;
-    
-                // 去重检查
                 if (uniqueTaskKeys.contains(taskKey)) {
                     duplicateCount++;
-                    continue; // 跳过重复记录
+                    continue;
                 }
-                uniqueTaskKeys.add(taskKey); // 添加到唯一集合
+                uniqueTaskKeys.add(taskKey);
     
-                // 更新统计
-                msgTypeCountMap.put(msgtype, msgTypeCountMap.getOrDefault(msgtype, 0) + 1);
-                totalRecords.incrementAndGet();
-    
-                // 构建JSON对象
                 ObjectNode taskJson = objectMapper.createObjectNode();
                 taskJson.put("msgtype", msgtype);
                 taskJson.put("sdkfileid", sdkfileid);
                 taskJson.put("md5sum", md5sum);
     
-                // 添加分隔逗号
-                if (!isFirst) {
-                    jsonWriter.write(",");
-                } else {
-                    isFirst = false;
-                }
-    
+                if (!isFirst) jsonWriter.write(",");
+                isFirst = false;
                 jsonWriter.write(taskJson.toString());
                 validCount++;
             }
     
-            jsonWriter.write("]"); // 结束JSON数组
-    
-            // 打印统计结果
-            logger.info("总计需要下载的数据条数: " + totalRecords.get());
-            for (Map.Entry<String, Integer> entry : msgTypeCountMap.entrySet()) {
-                logger.info("msgtype=" + entry.getKey() + " 的数量: " + entry.getValue());
-            }
-    
-            // 记录日志，包括去重信息
+            jsonWriter.write("]");
             logger.info(String.format(
                 "生成媒体文件清单完成，有效记录=%d，跳过无效记录=%d，跳过重复记录=%d",
                 validCount, skippedCount, duplicateCount
             ));
-    
-            return true;
+            return validCount; // 返回有效任务数
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
-            return false;
+            return -1;
         }
     }
 
@@ -852,76 +823,89 @@ public class FetchData {
     }
             
     private static boolean downloadMediaFilesToS3(long sdk) {
-        // 初始化计数器
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
-    
-        // 生成媒体清单文件路径
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_").replace(".csv", ".json");
-        logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
-        // 生成媒体文件清单
-        if (!generateMediaFilesJSON(curatedFilePath, mediaFilesPath)) {
-            logger.severe("生成媒体文件清单失败");
+        // 生成媒体清单并获取有效任务数
+        int totalTasks = generateMediaFilesJSON(curatedFilePath, mediaFilesPath);
+        if (totalTasks <= 0) {
+            logger.severe("无效的媒体任务数: " + totalTasks);
             return false;
         }
     
-        // 流式处理媒体任务
+        // 加载未完成任务（如果有）
+        loadPendingTasks(sdk, successCount, failureCount);
+    
+        // 流式处理任务
         processMediaTasksStreaming(mediaFilesPath, sdk, successCount, failureCount);
     
         // 等待所有任务完成
-        boolean finalStatus = waitForCompletion(successCount.get() + failureCount.get(), successCount, failureCount);
+        boolean finalStatus = waitForCompletion(totalTasks, successCount, failureCount);
     
         // 关闭线程池
         networkRetryExecutor.shutdown();
+        try {
+            if (!networkRetryExecutor.awaitTermination(1, TimeUnit.HOURS)) {
+                logger.warning("线程池未在1小时内完全终止");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    
         return finalStatus;
     }
 
-    private static void processMediaTasksStreaming(String mediaFilesPath, long sdk, AtomicInteger successCount, AtomicInteger failureCount) {
+     private static void processMediaTasksStreaming(
+        String mediaFilesPath, 
+        long sdk, 
+        AtomicInteger successCount, 
+        AtomicInteger failureCount
+    ) {
         try (InputStream inputStream = Files.newInputStream(Paths.get(mediaFilesPath));
              JsonParser parser = objectMapper.getFactory().createParser(inputStream)) {
-            
-            // 检查JSON数组起始标记
+    
             if (parser.nextToken() != JsonToken.START_ARRAY) {
-                logger.severe("媒体清单文件格式错误：未找到数组起始标记");
+                logger.severe("媒体清单文件格式错误");
                 return;
             }
-            
-            int batchSize = 1000; // 每批次提交1000个任务
-            List<JsonNode> batch = new ArrayList<>(batchSize);
-            
-            // 逐条读取JSON数组中的对象
+    
+            List<JsonNode> batch = new ArrayList<>(1000);
             while (parser.nextToken() == JsonToken.START_OBJECT) {
-                // 将当前对象解析为JsonNode
                 JsonNode taskNode = objectMapper.readTree(parser);
                 batch.add(taskNode);
-                
-                // 达到批次大小时提交任务
-                if (batch.size() >= batchSize) {
+    
+                if (batch.size() >= 1000) {
                     submitBatchTasks(batch, sdk, successCount, failureCount);
                     batch.clear();
                 }
             }
-            
-            // 提交剩余任务（最后一批）
+    
+            // 提交剩余任务
             if (!batch.isEmpty()) {
                 submitBatchTasks(batch, sdk, successCount, failureCount);
             }
+    
         } catch (Exception e) {
             logger.severe("流式处理媒体任务失败: " + e.getMessage());
         }
     }
     
-    private static void submitBatchTasks(List<JsonNode> batch, long sdk, AtomicInteger successCount, AtomicInteger failureCount) {
+    private static void submitBatchTasks(
+        List<JsonNode> batch, 
+        long sdk, 
+        AtomicInteger successCount, 
+        AtomicInteger failureCount
+    ) {
         ThreadPoolExecutor executor = (ThreadPoolExecutor) networkRetryExecutor;
         for (JsonNode taskNode : batch) {
-            // 如果队列已满，等待队列有空闲
-            while (executor.getQueue().size() >= executor.getQueue().remainingCapacity()) {
+            // 阻塞直到队列有空位
+            while (executor.getQueue().remainingCapacity() == 0) {
                 try {
-                    Thread.sleep(1000); // 每1秒检查一次队列
+                    Thread.sleep(1000);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    logger.severe("任务提交被中断: " + e.getMessage());
+                    logger.severe("任务提交被中断");
                     return;
                 }
             }
@@ -929,29 +913,49 @@ public class FetchData {
         }
     }
 
-    private static boolean waitForCompletion(int totalTasks, AtomicInteger successCount, AtomicInteger failureCount) {
-        final long GLOBAL_TIMEOUT = 48 * 60 * 60 * 1000; // 48小时全局超时
+    private static boolean waitForCompletion(
+        int totalTasks, 
+        AtomicInteger successCount, 
+        AtomicInteger failureCount
+    ) {
+        final long GLOBAL_TIMEOUT = 48 * 60 * 60 * 1000; // 48小时
         final long startTime = System.currentTimeMillis();
-        
+        final long STATUS_INTERVAL = 60_000; // 每分钟打印进度
+    
+        long lastStatusTime = 0;
         while (true) {
             int completed = successCount.get() + failureCount.get();
-            
-            // 完成条件判断
-            if (completed >= totalTasks) {
-                logger.info("所有任务处理完成，失败率: " + 
-                    (failureCount.get() * 100.0 / totalTasks) + "%");
-                return failureCount.get() < totalTasks * 0.1; // 允许10%失败
+            long currentTime = System.currentTimeMillis();
+    
+            // 打印进度
+            if (currentTime - lastStatusTime > STATUS_INTERVAL) {
+                logger.info(String.format(
+                    "媒体下载进度: 已完成 %d/%d (%.2f%%)，成功=%d，失败=%d",
+                    completed, totalTasks, 
+                    (completed * 100.0 / totalTasks),
+                    successCount.get(), failureCount.get()
+                ));
+                lastStatusTime = currentTime;
             }
-            
+    
+            // 完成条件
+            if (completed >= totalTasks) {
+                logger.info(String.format(
+                    "所有媒体任务处理完成！成功率=%.2f%%",
+                    (successCount.get() * 100.0 / totalTasks)
+                ));
+                return failureCount.get() <= totalTasks * 0.1; // 允许10%失败
+            }
+    
             // 超时处理
-            if (System.currentTimeMillis() - startTime > GLOBAL_TIMEOUT) {
+            if (currentTime - startTime > GLOBAL_TIMEOUT) {
                 logger.severe("全局超时（48小时），剩余任务: " + (totalTasks - completed));
                 return false;
             }
-            
-            // 休眠检测间隔
+    
+            // 休眠避免CPU忙等待
             try {
-                Thread.sleep(30000); // 每30秒检测一次
+                Thread.sleep(5000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 logger.severe("进度监控被中断");
