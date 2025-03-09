@@ -549,13 +549,13 @@ public class FetchData {
         int totalCount = 0;
         Set<String> uniqueTaskKeys = new HashSet<>();
     
-        // 配置健壮的CSV解析器
+        // 配置更宽松的CSV解析器
         CSVParser parser = new CSVParserBuilder()
             .withSeparator(',')
             .withQuoteChar('"')
             .withEscapeChar('\\')
             .withIgnoreQuotations(false)
-            .withStrictQuotes(true)
+            .withStrictQuotes(false) // 关键修复：禁用严格引号模式
             .build();
     
         try (LineNumberReader lineNumberReader = new LineNumberReader(new FileReader(chatFilePath));
@@ -566,103 +566,111 @@ public class FetchData {
              JsonGenerator jsonGenerator = objectMapper.getFactory()
                  .createGenerator(Files.newBufferedWriter(Paths.get(mediaFilesPath)))
                  .useDefaultPrettyPrinter()) {
-        
+    
             jsonGenerator.writeStartArray();
-        
+    
             String[] record;
             while ((record = csvReader.readNext()) != null) {
                 totalCount++;
                 int currentLine = lineNumberReader.getLineNumber();
-        
+    
                 try {
-                    // 验证记录长度
-                    if (record.length < 11) {
-                        logger.warning(String.format("无效记录(行%d) - 字段不足: %d/%d", 
-                            currentLine, record.length, 11));
+                    // 防御性校验：字段长度和空值检查
+                    if (record.length < 10) { // 确保至少有10列（msgtype在索引7）
+                        logger.warning(String.format("行 %d 字段不足（%d/10），跳过处理", currentLine, record.length));
                         skippedCount++;
                         continue;
                     }
-        
-                    String msgtype = record[7];
-                    String sdkfileid = record[8];
-                    String md5sum = record[9];
-        
-                    // 增强字段验证
+    
+                    String msgtype = record[7].trim();  // 第8列：消息类型
+                    String sdkfileid = record[8].trim(); // 第9列：文件ID
+                    String md5sum = record[9].trim();    // 第10列：MD5校验
+    
+                    // 空值校验
+                    if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum)) {
+                        logger.warning(String.format("行 %d 存在空字段 [msgtype=%s] [sdkfileid=%s] [md5sum=%s]",
+                            currentLine, msgtype, sdkfileid, md5sum));
+                        skippedCount++;
+                        continue;
+                    }
+    
+                    // 消息类型有效性校验
                     if (!isValidMsgTypeForMedia(msgtype)) {
-                        logger.warning(String.format("无效消息类型(行%d): %s", 
-                            currentLine, msgtype));
+                        logger.warning(String.format("行 %d 无效消息类型: %s", currentLine, msgtype));
                         skippedCount++;
                         continue;
                     }
-        
+    
+                    // 文件ID格式校验
                     if (!sdkfileid.matches("^[A-Za-z0-9+/=]{32,}$")) {
-                        logger.warning(String.format("无效SDK文件ID(行%d): %s", 
-                            currentLine, sdkfileid));
+                        logger.warning(String.format("行 %d 无效文件ID格式: %s", currentLine, sdkfileid));
                         skippedCount++;
                         continue;
                     }
-        
+    
+                    // MD5校验
                     if (!md5sum.matches("^[a-fA-F0-9]{32}$")) {
-                        logger.warning(String.format("无效MD5(行%d): %s", 
-                            currentLine, md5sum));
+                        logger.warning(String.format("行 %d 无效MD5格式: %s", currentLine, md5sum));
                         skippedCount++;
                         continue;
                     }
-        
+    
+                    // 去重校验
                     String taskKey = msgtype + "|" + sdkfileid + "|" + md5sum;
                     if (uniqueTaskKeys.contains(taskKey)) {
                         duplicateCount++;
                         continue;
                     }
                     uniqueTaskKeys.add(taskKey);
-        
+    
                     // 构建JSON对象
                     ObjectNode taskJson = objectMapper.createObjectNode();
                     taskJson.put("msgtype", msgtype);
                     taskJson.put("sdkfileid", sdkfileid);
                     taskJson.put("md5sum", md5sum);
-        
+    
                     jsonGenerator.writeObject(taskJson);
                     validCount++;
-        
-                } catch (IOException e) { // 替换 CsvValidationException 为 IOException
-                    logger.severe(String.format("CSV解析失败(行%d): %s", currentLine, e.getMessage()));
+    
+                } catch (Exception e) {
                     // 记录原始行内容用于调试
                     try {
                         lineNumberReader.reset();
                         String rawLine = lineNumberReader.readLine();
-                        logger.severe("问题行原始内容: " + rawLine);
+                        logger.severe(String.format("解析失败行 %d | 错误: %s | 原始内容: %s",
+                            currentLine, e.getMessage(), rawLine));
                     } catch (IOException ex) {
                         logger.severe("无法读取问题行内容: " + ex.getMessage());
                     }
                     skippedCount++;
                 }
             }
-        
+    
             jsonGenerator.writeEndArray();
-        
+    
             logger.info(String.format(
                 "生成媒体文件清单完成\n总记录数: %d\n有效记录: %d\n跳过无效记录: %d\n重复记录: %d",
                 totalCount, validCount, skippedCount, duplicateCount
             ));
-        
+    
             // 警告高跳过率
             if (skippedCount > 0 && (skippedCount * 100.0 / totalCount) > 5) {
                 logger.warning(String.format("高跳过率警告: %.2f%%", 
                     (skippedCount * 100.0 / totalCount)));
             }
-        
-            totalTasks = validCount; // 设置总任务数
+    
+            totalTasks = validCount;
             return validCount;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
             return -1;
         }
     }
-
+    
     // 新增校验方法
     private static boolean isValidMsgTypeForMedia(String msgtype) {
-        switch (msgtype) {
+        if (StringUtils.isBlank(msgtype)) return false;
+        switch (msgtype.trim().toLowerCase()) { // 增加空值和大小写处理
             case "image":
             case "voice":
             case "video":
@@ -826,30 +834,58 @@ public class FetchData {
         return sdkfileid;
     }
     
-    private static boolean validMsgTypeForMedia(String msgtype) {
-        return Set.of("image", "voice", "video", "emotion", "file")
-                 .contains(msgtype);
+    private static String escapeCsvField(String field) {
+        // 防御性空值处理
+        if (field == null) {
+            return "\"\""; // 返回空字段的标准表示
+        }
+    
+        // 预处理：替换控制字符和非法字符
+        String sanitized = field
+            .replaceAll("\\p{Cntrl}", " ")  // 替换控制字符为空格
+            .replaceAll("[\\x00-\\x1F\\x7F]", " ") // 替换其他非打印字符
+            .trim(); // 去除首尾空白
+    
+        // 核心转义逻辑
+        StringBuilder escaped = new StringBuilder();
+        boolean needsQuotes = false;
+        
+        for (char c : sanitized.toCharArray()) {
+            switch (c) {
+                case '"':
+                    escaped.append("\"\""); // 双引号转义
+                    needsQuotes = true;
+                    break;
+                case '\n':
+                    escaped.append("\\n");   // 换行符转义
+                    needsQuotes = true;
+                    break;
+                case '\r':
+                    escaped.append("\\r");   // 回车符转义
+                    needsQuotes = true;
+                    break;
+                case ',':
+                    needsQuotes = true;      // 逗号需要引号包裹
+                    escaped.append(c);
+                    break;
+                default:
+                    escaped.append(c);
+            }
+        }
+    
+        // 自动检测是否需要引号包裹
+        final String result = escaped.toString();
+        needsQuotes = needsQuotes 
+            || result.contains(",") 
+            || result.contains("\"")
+            || result.isEmpty();
+    
+        // 构建最终结果
+        return needsQuotes ? 
+            "\"" + result + "\"" : 
+            (result.isEmpty() ? "\"\"" : result);
     }
 
-    private static String escapeCsvField(String field) {
-        if (field == null || field.isEmpty()) {
-            return "\"\"";
-        }
-    
-        // 处理特殊字符
-        String escaped = field
-            .replace("\\", "\\\\")  // 先转义反斜杠
-            .replace("\"", "\"\"")  // 转义双引号
-            .replace("\n", "\\n")   // 处理换行符
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
-    
-        // 需要包裹的情况：包含逗号、换行符或双引号
-        if (escaped.contains(",") || escaped.contains("\n") || escaped.contains("\"")) {
-            return "\"" + escaped + "\"";
-        }
-        return escaped;
-    }
     private static File downloadMediaFile(long sdk, String sdkfileid, String md5sum, String msgtype) {
         String indexbuf = "";
         File tempFile = null;
