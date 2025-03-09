@@ -486,7 +486,14 @@ public class FetchData {
     
                     successCount++;
                     String escapedDecryptedMsg = escapeControlCharacters(decryptedMsg);
-                    JsonNode decryptedRootNode = objectMapper.readTree(escapedDecryptedMsg);
+                    JsonNode decryptedRootNode;
+                    try {
+                        decryptedRootNode = objectMapper.readTree(escapedDecryptedMsg);
+                    } catch (Exception e) {
+                        logger.warning("解析解密后的JSON失败: " + e.getMessage());
+                        failureCount++;
+                        continue;
+                    }
     
                     String action = decryptedRootNode.path("action").asText();
                     String sender = decryptedRootNode.path("from").asText();
@@ -495,10 +502,18 @@ public class FetchData {
                     long msgtime = decryptedRootNode.path("msgtime").asLong();
                     String msgtype = decryptedRootNode.path("msgtype").asText();
                     String sdkfileid = extractSeqFileId(decryptedRootNode, msgtype);
-                    String md5sum = extractMd5Sum(decryptedRootNode, msgtype); // 新增 md5sum 提取
+                    String md5sum = extractMd5Sum(decryptedRootNode, msgtype);
     
                     JsonNode rawJsonNode = decryptedRootNode.path(msgtype);
-                    String rawJson = rawJsonNode.toString();
+                    String rawJson;
+                    try {
+                        // 验证JSON合法性
+                        objectMapper.readTree(rawJsonNode.toString());
+                        rawJson = rawJsonNode.toString();
+                    } catch (Exception e) {
+                        logger.warning("无效的JSON内容，替换为默认值");
+                        rawJson = "{}"; // 替换空JSON
+                    }
     
                     Instant instant = Instant.ofEpochMilli(msgtime);
                     ZonedDateTime beijingTime = instant.atZone(ZoneId.of("Asia/Shanghai"));
@@ -507,16 +522,22 @@ public class FetchData {
     
                     String escapedRawJson = escapeCsvField(rawJson);
     
-                    // 写入 curated 文件（新增 md5sum 列）
+                    // 写入 curated 文件
                     if (tolistNode.isArray()) {
                         for (JsonNode to : tolistNode) {
                             String receiver = to.asText();
-                            curatedWriter.write(seqStr + "," + msgid + "," + action + "," + sender + "," + receiver + "," + roomid + "," + beijingTimeStr + "," + msgtype + "," + sdkfileid + "," + md5sum + "," + escapedRawJson);
+                            curatedWriter.write(String.join(",",
+                                seqStr, msgid, action, sender, receiver, roomid,
+                                beijingTimeStr, msgtype, sdkfileid, md5sum, escapedRawJson
+                            ));
                             curatedWriter.newLine();
                         }
                     } else {
                         String receiver = tolistNode.toString();
-                        curatedWriter.write(seqStr + "," + msgid + "," + action + "," + sender + "," + receiver + "," + roomid + "," + beijingTimeStr + "," + msgtype + "," + sdkfileid + "," + md5sum + "," + escapedRawJson);
+                        curatedWriter.write(String.join(",",
+                            seqStr, msgid, action, sender, receiver, roomid,
+                            beijingTimeStr, msgtype, sdkfileid, md5sum, escapedRawJson
+                        ));
                         curatedWriter.newLine();
                     }
                 }
@@ -549,13 +570,13 @@ public class FetchData {
         int totalCount = 0;
         Set<String> uniqueTaskKeys = new HashSet<>();
     
-        // 配置容错性 CSV 解析器
+        // 配置更宽松的CSV解析器
         CSVParser parser = new CSVParserBuilder()
             .withSeparator(',')
             .withQuoteChar('"')
             .withEscapeChar('\\')
-            .withIgnoreQuotations(true)  // 允许非引号字段
-            .withStrictQuotes(false)     // 不严格检查引号闭合
+            .withIgnoreQuotations(true) // 允许非严格模式
+            .withStrictQuotes(false)
             .build();
     
         try (LineNumberReader lineNumberReader = new LineNumberReader(new FileReader(chatFilePath));
@@ -570,43 +591,93 @@ public class FetchData {
             jsonGenerator.writeStartArray();
     
             String[] record;
-            while ((record = csvReader.readNext()) != null) {
+            while (true) {
+                try {
+                    record = csvReader.readNext();
+                    if (record == null) break;
+                } catch (CsvValidationException e) {
+                    int currentLine = lineNumberReader.getLineNumber();
+                    logger.warning("跳过格式错误的行: " + currentLine);
+                    skippedCount++;
+                    continue;
+                }
+    
                 totalCount++;
                 int currentLine = lineNumberReader.getLineNumber();
-                String rawLine = ""; // 用于记录原始行内容
     
                 try {
-                    // 记录原始行内容（用于错误日志）
-                    lineNumberReader.mark(8192);
-                    rawLine = lineNumberReader.readLine();
-                    lineNumberReader.reset();
-    
-                    // 字段校验
                     if (record.length < 10) {
-                        logger.warning(String.format("行 %d 字段不足（%d/10），跳过处理 | 原始行: %s", 
-                            currentLine, record.length, rawLine));
+                        logger.warning(String.format("行 %d 字段不足（%d/10），跳过处理", currentLine, record.length));
                         skippedCount++;
                         continue;
                     }
     
-                    // 其他处理逻辑保持不变...
-                    // [原有字段处理逻辑，此处省略]
+                    String msgtype = record[7].trim();
+                    String sdkfileid = record[8].trim();
+                    String md5sum = record[9].trim();
+    
+                    if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum)) {
+                        logger.warning(String.format("行 %d 存在空字段 [msgtype=%s] [sdkfileid=%s] [md5sum=%s]",
+                            currentLine, msgtype, sdkfileid, md5sum));
+                        skippedCount++;
+                        continue;
+                    }
+    
+                    if (!isValidMsgTypeForMedia(msgtype)) {
+                        logger.warning(String.format("行 %d 无效消息类型: %s", currentLine, msgtype));
+                        skippedCount++;
+                        continue;
+                    }
+    
+                    if (!sdkfileid.matches("^[A-Za-z0-9+/=]{32,}$")) {
+                        logger.warning(String.format("行 %d 无效文件ID格式: %s", currentLine, sdkfileid));
+                        skippedCount++;
+                        continue;
+                    }
+    
+                    if (!isValidMD5(md5sum)) {
+                        logger.warning(String.format("行 %d 无效MD5格式: %s", currentLine, md5sum));
+                        skippedCount++;
+                        continue;
+                    }
+    
+                    String uniqueKey = msgtype + "|" + md5sum;
+                    if (uniqueTaskKeys.contains(uniqueKey)) {
+                        duplicateCount++;
+                        logger.fine("跳过重复媒体文件: type=" + msgtype + " md5=" + md5sum);
+                        continue;
+                    }
+                    uniqueTaskKeys.add(uniqueKey);
+    
+                    ObjectNode taskJson = objectMapper.createObjectNode();
+                    taskJson.put("msgtype", msgtype);
+                    taskJson.put("sdkfileid", sdkfileid);
+                    taskJson.put("md5sum", md5sum);
+                    jsonGenerator.writeObject(taskJson);
+                    validCount++;
     
                 } catch (Exception e) {
-                    // 增强错误日志
-                    logger.severe(String.format(
-                        "解析失败行 %d | 错误: %s | 原始行内容: %s",
-                        currentLine, e.getMessage(), rawLine
-                    ));
+                    try {
+                        lineNumberReader.reset();
+                        String rawLine = lineNumberReader.readLine();
+                        logger.severe(String.format("解析失败行 %d | 错误: %s | 原始内容: %s",
+                            currentLine, e.getMessage(), rawLine));
+                    } catch (IOException ex) {
+                        logger.severe("无法读取问题行内容: " + ex.getMessage());
+                    }
                     skippedCount++;
                 }
             }
     
             jsonGenerator.writeEndArray();
     
-            // 日志统计信息保持不变...
-            return validCount;
+            logger.info(String.format(
+                "生成媒体文件清单完成\n总记录数: %d\n有效记录: %d\n跳过无效记录: %d\n重复记录: %d",
+                totalCount, validCount, skippedCount, duplicateCount
+            ));
     
+            totalTasks = validCount;
+            return validCount;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
             return -1;
@@ -781,22 +852,25 @@ public class FetchData {
     }
     
     private static String escapeCsvField(String field) {
-        // 防御性空值处理
         if (field == null || field.isEmpty()) {
             return "\"\""; // 返回空字段的标准表示
         }
-    
-        // 预处理：替换控制字符和非法字符
-        String sanitized = field
-            .replaceAll("\\p{Cntrl}", " ")  // 替换控制字符为空格
-            .replaceAll("[\\x00-\\x1F\\x7F]", " ") // 替换其他非打印字符
-            .trim(); // 去除首尾空白
-    
-        // 核心转义逻辑：转义双引号为两个双引号
-        String escaped = sanitized.replace("\"", "\"\"");
-    
-        // 强制包裹在双引号中（即使内容无特殊字符）
-        return "\"" + escaped + "\"";
+        
+        StringWriter sw = new StringWriter();
+        try (CSVWriter writer = new CSVWriter(sw)) {
+            // 使用 OpenCSV 的标准转义逻辑
+            writer.writeNext(new String[]{field});
+            String escaped = sw.toString().trim();
+            
+            // 处理 OpenCSV 自动添加的换行符
+            if (escaped.endsWith("\n") || escaped.endsWith("\r")) {
+                escaped = escaped.substring(0, escaped.length()-1);
+            }
+            return escaped;
+        } catch (IOException e) {
+            logger.warning("CSV字段转义失败: " + e.getMessage());
+            return "\"" + field.replace("\"", "\"\"") + "\""; // 降级处理
+        }
     }
 
     private static File downloadMediaFile(long sdk, String sdkfileid, String md5sum, String msgtype) {
