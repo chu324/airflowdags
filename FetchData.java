@@ -15,11 +15,13 @@ import software.amazon.awssdk.services.sns.model.SnsException;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.CSVWriter;
 import com.opencsv.CSVReader;
+import com.opencsv.CSVParser;
 import com.opencsv.CSVReaderBuilder;
 import com.opencsv.CSVParserBuilder;
 import com.opencsv.exceptions.CsvValidationException;
@@ -35,6 +37,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.Duration;
 import java.time.format.DateTimeFormatter;
@@ -84,6 +87,8 @@ public class FetchData {
 
     // 定义 curated 文件路径
     private static String curatedFilePath = null;
+
+    private static int totalTasks;
 
     private static final String PENDING_TASKS_FILE = "/home/ec2-user/wecom_integration/logs/pending_media_tasks.log";
 
@@ -553,29 +558,27 @@ public class FetchData {
             .withStrictQuotes(true)
             .build();
     
-        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath))
-                .withCSVParser(parser)
-                .withSkipLines(1) // 跳过表头
-                .build();
+        try (LineNumberReader lineNumberReader = new LineNumberReader(new FileReader(chatFilePath));
+             CSVReader csvReader = new CSVReaderBuilder(lineNumberReader)
+                 .withCSVParser(parser)
+                 .withSkipLines(1) // 跳过表头
+                 .build();
              JsonGenerator jsonGenerator = objectMapper.getFactory()
-                .createGenerator(Files.newBufferedWriter(Paths.get(mediaFilesPath)))
-                .useDefaultPrettyPrinter()) {
+                 .createGenerator(Files.newBufferedWriter(Paths.get(mediaFilesPath)))
+                 .useDefaultPrettyPrinter()) {
     
             jsonGenerator.writeStartArray();
     
             String[] record;
-            LineNumberReader lineReader = (LineNumberReader) csvReader.getReader();
-            
-            while (true) {
-                try {
-                    record = csvReader.readNext();
-                    if (record == null) break;
-                    totalCount++;
+            while ((record = csvReader.readNext()) != null) {
+                totalCount++;
+                int currentLine = lineNumberReader.getLineNumber();
     
+                try {
                     // 验证记录长度
                     if (record.length < 11) {
                         logger.warning(String.format("无效记录(行%d) - 字段不足: %d/%d", 
-                            lineReader.getLineNumber(), record.length, 11));
+                            currentLine, record.length, 11));
                         skippedCount++;
                         continue;
                     }
@@ -587,21 +590,21 @@ public class FetchData {
                     // 增强字段验证
                     if (!isValidMsgTypeForMedia(msgtype)) {
                         logger.warning(String.format("无效消息类型(行%d): %s", 
-                            lineReader.getLineNumber(), msgtype));
+                            currentLine, msgtype));
                         skippedCount++;
                         continue;
                     }
     
                     if (!sdkfileid.matches("^[A-Za-z0-9+/=]{32,}$")) {
                         logger.warning(String.format("无效SDK文件ID(行%d): %s", 
-                            lineReader.getLineNumber(), sdkfileid));
+                            currentLine, sdkfileid));
                         skippedCount++;
                         continue;
                     }
     
                     if (!md5sum.matches("^[a-fA-F0-9]{32}$")) {
                         logger.warning(String.format("无效MD5(行%d): %s", 
-                            lineReader.getLineNumber(), md5sum));
+                            currentLine, md5sum));
                         skippedCount++;
                         continue;
                     }
@@ -623,12 +626,11 @@ public class FetchData {
                     validCount++;
     
                 } catch (CsvValidationException e) {
-                    long lineNumber = lineReader.getLineNumber();
-                    logger.severe(String.format("CSV解析失败(行%d): %s", lineNumber, e.getMessage()));
-                    
+                    logger.severe(String.format("CSV解析失败(行%d): %s", currentLine, e.getMessage()));
                     // 记录原始行内容用于调试
                     try {
-                        String rawLine = lineReader.readLine();
+                        lineNumberReader.reset();
+                        String rawLine = lineNumberReader.readLine();
                         logger.severe("问题行原始内容: " + rawLine);
                     } catch (IOException ex) {
                         logger.severe("无法读取问题行内容: " + ex.getMessage());
@@ -650,6 +652,7 @@ public class FetchData {
                     (skippedCount * 100.0 / totalCount)));
             }
     
+            totalTasks = validCount; // 设置总任务数
             return validCount;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
