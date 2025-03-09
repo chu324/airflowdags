@@ -821,7 +821,7 @@ public class FetchData {
 
     private static String extractSeqFileId(JsonNode decryptedRootNode, String msgtype) {
         // 增加sdkfileid有效性校验
-        if (!validMsgTypeForMedia(msgtype)) return "";
+        if (!isValidMsgTypeForMedia(msgtype)) return "";
     
         JsonNode msgTypeNode = decryptedRootNode.path(msgtype);
         String sdkfileid = msgTypeNode.path("sdkfileid").asText("").trim();
