@@ -796,7 +796,7 @@ public class FetchData {
     
             // 上传到 S3
             String s3Key = getMediaS3Key(msgtype, md5sum);
-            (finalFile.getAbsolutePath(), mediaS3BucketName, s3Key);
+            uploadFileToS3(finalFile.getAbsolutePath(), mediaS3BucketName, s3Key);
         } catch (Exception e) {
             logger.severe("媒体文件处理失败: " + e.getMessage());
             e.printStackTrace(); // 打印堆栈信息
@@ -1017,14 +1017,14 @@ public class FetchData {
             String rawZipFilePath = compressFile(rawFilePath, "wecom_chat_" + taskDateStr + ".zip");
             String rawS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/wecom_chat_" + taskDateStr + ".zip";
             logger.info("开始上传 raw 文件到 S3: " + rawS3Key);
-            (rawZipFilePath, s3BucketName, rawS3Key);
+            uploadFileToS3(rawZipFilePath, s3BucketName, rawS3Key);
             logger.info("raw 文件上传完成: " + rawS3Key);
     
             // 压缩并上传 curated 文件
             String curatedZipFilePath = compressFile(curatedFilePath, "chat_" + taskDateStr + ".zip");
             String curatedS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/chat_" + taskDateStr + ".zip";
             logger.info("开始上传 curated 文件到 S3: " + curatedS3Key);
-            (curatedZipFilePath, s3BucketName, curatedS3Key);
+            uploadFileToS3(curatedZipFilePath, s3BucketName, curatedS3Key);
             logger.info("curated 文件上传完成: " + curatedS3Key);
     
             // 生成 userid_mapping_yyyymmdd.csv 文件的路径
