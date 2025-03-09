@@ -537,7 +537,11 @@ public class FetchData {
     private static boolean generateMediaFilesJSON(String chatFilePath, String mediaFilesPath) {
         int validCount = 0;
         int skippedCount = 0;
-        int duplicateCount = 0; // 新增：记录跳过的重复记录数
+        int duplicateCount = 0;
+    
+        // 定义统计变量
+        Map<String, Integer> msgTypeCountMap = new HashMap<>();
+        AtomicInteger totalRecords = new AtomicInteger(0);
     
         // 使用 Set 来存储唯一的媒体任务标识
         Set<String> uniqueTaskKeys = new HashSet<>();
@@ -577,6 +581,10 @@ public class FetchData {
                 }
                 uniqueTaskKeys.add(taskKey); // 添加到唯一集合
     
+                // 更新统计
+                msgTypeCountMap.put(msgtype, msgTypeCountMap.getOrDefault(msgtype, 0) + 1);
+                totalRecords.incrementAndGet();
+    
                 // 构建JSON对象
                 ObjectNode taskJson = objectMapper.createObjectNode();
                 taskJson.put("msgtype", msgtype);
@@ -595,6 +603,12 @@ public class FetchData {
             }
     
             jsonWriter.write("]"); // 结束JSON数组
+    
+            // 打印统计结果
+            logger.info("总计需要下载的数据条数: " + totalRecords.get());
+            for (Map.Entry<String, Integer> entry : msgTypeCountMap.entrySet()) {
+                logger.info("msgtype=" + entry.getKey() + " 的数量: " + entry.getValue());
+            }
     
             // 记录日志，包括去重信息
             logger.info(String.format(
