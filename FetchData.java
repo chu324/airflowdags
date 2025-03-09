@@ -669,37 +669,60 @@ public class FetchData {
     }
 
     private static void executeTaskWithRetry(long sdk, JsonNode taskNode, AtomicInteger successCount, AtomicInteger failureCount) {
+        String taskJson = taskNode.toString();
+        String errorMsg = "";
+        String msgtype = "";
+        String sdkfileid = "";
+    
         try {
-            String msgtype = taskNode.path("msgtype").asText();
-            String sdkfileid = taskNode.path("sdkfileid").asText();
+            msgtype = taskNode.path("msgtype").asText();
+            sdkfileid = taskNode.path("sdkfileid").asText();
             String md5sum = taskNode.path("md5sum").asText();
     
-            // 二次校验（防御性编程）
+            // 防御性校验
             if (!isValidMsgTypeForMedia(msgtype) || !isValidSDKFileId(sdkfileid) || !isValidMD5(md5sum)) {
-                logger.warning("跳过无效媒体记录: " + taskNode);
-                failureCount.incrementAndGet();
-                return;
+                errorMsg = "Invalid task parameters";
+                throw new IllegalArgumentException(errorMsg);
             }
     
             // 下载媒体文件
             File mediaFile = downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
             if (mediaFile == null) {
-                logger.severe("媒体文件下载失败: " + taskNode);
-                failureCount.incrementAndGet();
-                return;
+                errorMsg = "Download failed";
+                throw new IOException(errorMsg);
             }
     
             // 上传到S3
             String s3Key = getMediaS3Key(msgtype, md5sum);
             uploadFileToS3(mediaFile.getAbsolutePath(), mediaS3BucketName, s3Key);
     
-            // 删除本地临时文件
+            // 清理临时文件
             Files.delete(mediaFile.toPath());
     
             successCount.incrementAndGet();
         } catch (Exception e) {
             failureCount.incrementAndGet();
-            logger.severe("媒体任务处理失败: " + taskNode + " - " + e.getMessage());
+            errorMsg = String.format("%s: %s", e.getClass().getSimpleName(), e.getMessage());
+            logFailureToFile(msgtype, sdkfileid, errorMsg);
+        } finally {
+            int totalProcessed = successCount.get() + failureCount.get();
+            if (totalProcessed % 100 == 0) {
+                logProgress(totalProcessed, successCount.get(), failureCount.get());
+            }
+        }
+    }
+
+    private static synchronized void logFailureToFile(String msgtype, String sdkfileid, String error) {
+        String logEntry = String.format("[%s] Type: %-6s | FileID: %-20s | Error: %s%n",
+                LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                msgtype,
+                StringUtils.abbreviate(sdkfileid, 20),
+                error);
+    
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter("logs/media_failures.log", true))) {
+            writer.write(logEntry);
+        } catch (IOException e) {
+            logger.log(Level.SEVERE, "无法写入失败日志文件", e);
         }
     }
     
@@ -901,32 +924,23 @@ public class FetchData {
         AtomicInteger failureCount = new AtomicInteger(0);
         String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_").replace(".csv", ".json");
     
-        // 生成媒体清单并获取有效任务数
-        int totalTasks = generateMediaFilesJSON(curatedFilePath, mediaFilesPath);
-        if (totalTasks <= 0) {
-            logger.severe("无效的媒体任务数: " + totalTasks);
+        // 初始化日志目录
+        new File("logs").mkdirs();
+    
+        // 生成媒体清单
+        totalTasks = generateMediaFilesJSON(curatedFilePath, mediaFilesPath);
+        if (totalTasks < 0) {
+            logger.severe("媒体清单生成失败");
             return false;
         }
     
-        // 加载未完成任务（如果有）
-        loadPendingTasks(sdk, successCount, failureCount);
-    
-        // 流式处理任务
+        // 处理任务
         processMediaTasksStreaming(mediaFilesPath, sdk, successCount, failureCount);
-    
-        // 等待所有任务完成
         boolean finalStatus = waitForCompletion(totalTasks, successCount, failureCount);
     
-        // 关闭线程池
-        networkRetryExecutor.shutdown();
-        try {
-            if (!networkRetryExecutor.awaitTermination(1, TimeUnit.HOURS)) {
-                logger.warning("线程池未在1小时内完全终止");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    
+        // 强制打印最终进度
+        logProgress(totalTasks, successCount.get(), failureCount.get());
+        
         return finalStatus;
     }
 
@@ -987,82 +1001,54 @@ public class FetchData {
         }
     }
 
-    private static boolean waitForCompletion(
-        int totalTasks, 
-        AtomicInteger successCount, 
-        AtomicInteger failureCount
-    ) {
-        final long GLOBAL_TIMEOUT = 48 * 60 * 60 * 1000; // 48小时
-        final long startTime = System.currentTimeMillis();
-        final long STATUS_INTERVAL = 60_000; // 每分钟打印进度
+    private static boolean waitForCompletion(int totalTasks, AtomicInteger successCount, AtomicInteger failureCount) {
+        final long STATUS_INTERVAL = 60_000; // 每分钟强制打印进度
+        long lastStatusTime = System.currentTimeMillis();
     
-        long lastStatusTime = 0;
         while (true) {
             int completed = successCount.get() + failureCount.get();
             long currentTime = System.currentTimeMillis();
     
-            // 打印进度
+            // 强制每分钟至少打印一次进度
             if (currentTime - lastStatusTime > STATUS_INTERVAL) {
-                logger.info(String.format(
-                    "媒体下载进度: 已完成 %d/%d (%.2f%%)，成功=%d，失败=%d",
-                    completed, totalTasks, 
-                    (completed * 100.0 / totalTasks),
-                    successCount.get(), failureCount.get()
-                ));
+                logProgress(completed, successCount.get(), failureCount.get());
                 lastStatusTime = currentTime;
             }
     
-            // 完成条件
+            // 完成条件（必须全部完成）
             if (completed >= totalTasks) {
                 logger.info(String.format(
-                    "所有媒体任务处理完成！成功率=%.2f%%",
-                    (successCount.get() * 100.0 / totalTasks)
+                    "【最终统计】总数: %d | 成功: %d (%.2f%%) | 失败: %d (%.2f%%)",
+                    totalTasks,
+                    successCount.get(), (successCount.get() * 100.0 / totalTasks),
+                    failureCount.get(), (failureCount.get() * 100.0 / totalTasks)
                 ));
-                return failureCount.get() <= totalTasks * 0.1; // 允许10%失败
+                return true;
             }
     
-            // 超时处理
-            if (currentTime - startTime > GLOBAL_TIMEOUT) {
-                logger.severe("全局超时（48小时），剩余任务: " + (totalTasks - completed));
-                return false;
-            }
-    
-            // 休眠避免CPU忙等待
             try {
                 Thread.sleep(5000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 logger.severe("进度监控被中断");
-                return false;
+                return true;
             }
         }
     }
 
-    private static void loadPendingTasks(long sdk, AtomicInteger successCount, AtomicInteger failureCount) {
-        if (!Files.exists(Paths.get(PENDING_TASKS_FILE))) return;
+    private static void logProgress(int completed, int success, int failure) {
+        double progress = (completed * 100.0) / totalTasks;
+        String progressBar = buildProgressBar(progress);
+        
+        logger.info(String.format(
+            "媒体下载进度: %s %d/%d (%.2f%%) | 成功=%d | 失败=%d",
+            progressBar, completed, totalTasks, progress, success, failure
+        ));
+    }
     
-        try {
-            List<String> tasks = Files.readAllLines(Paths.get(PENDING_TASKS_FILE));
-            logger.info("发现未完成任务数: " + tasks.size());
-    
-            for (String taskLine : tasks) {
-                String[] parts = taskLine.split("\\|");
-                if (parts.length < 1) continue;
-                String taskJsonStr = parts[0];
-                try {
-                    JsonNode taskNode = objectMapper.readTree(taskJsonStr);
-                    networkRetryExecutor.submit(() -> {
-                        logger.info("重新提交待处理任务: " + taskNode);
-                        executeTaskWithRetry(sdk, taskNode, successCount, failureCount);
-                    });
-                } catch (IOException e) {
-                    logger.severe("解析待处理任务失败: " + taskJsonStr);
-                }
-            }
-            Files.delete(Paths.get(PENDING_TASKS_FILE));
-        } catch (IOException e) {
-            logger.severe("加载待处理任务失败: " + e.getMessage());
-        }
+    private static String buildProgressBar(double progress) {
+        int bars = (int) (progress / 2); // 50个字符表示100%
+        return String.format("[%-50s]", StringUtils.repeat("#", bars));
     }
 
     private static final ExecutorService networkRetryExecutor = Executors.newFixedThreadPool(10); // 限制并发度为 10
