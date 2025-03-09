@@ -547,21 +547,21 @@ public class FetchData {
         int skippedCount = 0;
         int duplicateCount = 0;
         int totalCount = 0;
-        Set<String> uniqueTaskKeys = new HashSet<>();
+        Set<String> uniqueTaskKeys = new HashSet<>(); // 改用 msgtype|md5sum 作为唯一键
     
-        // 配置更宽松的CSV解析器
+        // 配置CSV解析器（保持原有配置）
         CSVParser parser = new CSVParserBuilder()
             .withSeparator(',')
             .withQuoteChar('"')
             .withEscapeChar('\\')
             .withIgnoreQuotations(false)
-            .withStrictQuotes(false) // 关键修复：禁用严格引号模式
+            .withStrictQuotes(false)
             .build();
     
         try (LineNumberReader lineNumberReader = new LineNumberReader(new FileReader(chatFilePath));
              CSVReader csvReader = new CSVReaderBuilder(lineNumberReader)
                  .withCSVParser(parser)
-                 .withSkipLines(1) // 跳过表头
+                 .withSkipLines(1)
                  .build();
              JsonGenerator jsonGenerator = objectMapper.getFactory()
                  .createGenerator(Files.newBufferedWriter(Paths.get(mediaFilesPath)))
@@ -575,16 +575,16 @@ public class FetchData {
                 int currentLine = lineNumberReader.getLineNumber();
     
                 try {
-                    // 防御性校验：字段长度和空值检查
-                    if (record.length < 10) { // 确保至少有10列（msgtype在索引7）
+                    // 字段校验（保持原有逻辑）
+                    if (record.length < 10) {
                         logger.warning(String.format("行 %d 字段不足（%d/10），跳过处理", currentLine, record.length));
                         skippedCount++;
                         continue;
                     }
     
-                    String msgtype = record[7].trim();  // 第8列：消息类型
-                    String sdkfileid = record[8].trim(); // 第9列：文件ID
-                    String md5sum = record[9].trim();    // 第10列：MD5校验
+                    String msgtype = record[7].trim();
+                    String sdkfileid = record[8].trim();
+                    String md5sum = record[9].trim();
     
                     // 空值校验
                     if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum)) {
@@ -609,19 +609,20 @@ public class FetchData {
                     }
     
                     // MD5校验
-                    if (!md5sum.matches("^[a-fA-F0-9]{32}$")) {
+                    if (!isValidMD5(md5sum)) {
                         logger.warning(String.format("行 %d 无效MD5格式: %s", currentLine, md5sum));
                         skippedCount++;
                         continue;
                     }
     
-                    // 去重校验
-                    String taskKey = msgtype + "|" + sdkfileid + "|" + md5sum;
-                    if (uniqueTaskKeys.contains(taskKey)) {
+                    // ==== 关键修改：去重逻辑改为 msgtype|md5sum ====
+                    String uniqueKey = msgtype + "|" + md5sum;
+                    if (uniqueTaskKeys.contains(uniqueKey)) {
                         duplicateCount++;
+                        logger.fine("跳过重复媒体文件: type=" + msgtype + " md5=" + md5sum);
                         continue;
                     }
-                    uniqueTaskKeys.add(taskKey);
+                    uniqueTaskKeys.add(uniqueKey);
     
                     // 构建JSON对象
                     ObjectNode taskJson = objectMapper.createObjectNode();
@@ -633,7 +634,7 @@ public class FetchData {
                     validCount++;
     
                 } catch (Exception e) {
-                    // 记录原始行内容用于调试
+                    // 错误处理（保持原有逻辑）
                     try {
                         lineNumberReader.reset();
                         String rawLine = lineNumberReader.readLine();
@@ -652,12 +653,6 @@ public class FetchData {
                 "生成媒体文件清单完成\n总记录数: %d\n有效记录: %d\n跳过无效记录: %d\n重复记录: %d",
                 totalCount, validCount, skippedCount, duplicateCount
             ));
-    
-            // 警告高跳过率
-            if (skippedCount > 0 && (skippedCount * 100.0 / totalCount) > 5) {
-                logger.warning(String.format("高跳过率警告: %.2f%%", 
-                    (skippedCount * 100.0 / totalCount)));
-            }
     
             totalTasks = validCount;
             return validCount;
