@@ -537,12 +537,16 @@ public class FetchData {
     private static boolean generateMediaFilesJSON(String chatFilePath, String mediaFilesPath) {
         int validCount = 0;
         int skippedCount = 0;
-        
+        int duplicateCount = 0; // 新增：记录跳过的重复记录数
+    
+        // 使用 Set 来存储唯一的媒体任务标识
+        Set<String> uniqueTaskKeys = new HashSet<>();
+    
         try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath));
              BufferedWriter jsonWriter = Files.newBufferedWriter(Paths.get(mediaFilesPath))) {
     
             jsonWriter.write("["); // 开始JSON数组
-            
+    
             String[] record;
             boolean isFirst = true;
             while ((record = csvReader.readNext()) != null) {
@@ -556,12 +560,22 @@ public class FetchData {
                 String md5sum = record[9];
     
                 // 有效性校验
-                if (!isValidMsgTypeForMedia(msgtype) || 
-                    !isValidSDKFileId(sdkfileid) || 
+                if (!isValidMsgTypeForMedia(msgtype) ||
+                    !isValidSDKFileId(sdkfileid) ||
                     !isValidMD5(md5sum)) {
                     skippedCount++;
                     continue;
                 }
+    
+                // 生成唯一任务标识
+                String taskKey = msgtype + "|" + sdkfileid + "|" + md5sum;
+    
+                // 去重检查
+                if (uniqueTaskKeys.contains(taskKey)) {
+                    duplicateCount++;
+                    continue; // 跳过重复记录
+                }
+                uniqueTaskKeys.add(taskKey); // 添加到唯一集合
     
                 // 构建JSON对象
                 ObjectNode taskJson = objectMapper.createObjectNode();
@@ -575,13 +589,19 @@ public class FetchData {
                 } else {
                     isFirst = false;
                 }
-                
+    
                 jsonWriter.write(taskJson.toString());
                 validCount++;
             }
-            
+    
             jsonWriter.write("]"); // 结束JSON数组
-            logger.info(String.format("生成媒体文件清单完成，有效记录=%d，跳过无效记录=%d", validCount, skippedCount));
+    
+            // 记录日志，包括去重信息
+            logger.info(String.format(
+                "生成媒体文件清单完成，有效记录=%d，跳过无效记录=%d，跳过重复记录=%d",
+                validCount, skippedCount, duplicateCount
+            ));
+    
             return true;
         } catch (Exception e) {
             logger.severe("生成媒体文件清单失败: " + e.getMessage());
