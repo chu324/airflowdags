@@ -276,13 +276,6 @@ public class FetchData {
             logger.warning("解密并保存到 curated 文件失败");
         }
     
-        // 生成 media_files.csv 文件
-        String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
-        boolean mediaFilesGenerated = generateMediaFilesJSON(curatedFilePath, mediaFilesPath);
-        if (!mediaFilesGenerated) {
-            logger.severe("生成 media_files.csv 文件失败");
-        }
-    
         // 生成 userid_mapping_yyyymmdd.csv 文件,保留后续使用
         //String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
         //generateUserIdMappingFile(curatedFilePath, mappingFilePath);
@@ -851,7 +844,7 @@ public class FetchData {
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
     
-        String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_");
+        String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_").replace(".csv", ".json");
         logger.info("开始处理媒体文件下载任务，文件清单路径: " + mediaFilesPath);
     
         // 生成媒体文件清单
