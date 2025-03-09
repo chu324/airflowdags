@@ -566,14 +566,14 @@ public class FetchData {
              JsonGenerator jsonGenerator = objectMapper.getFactory()
                  .createGenerator(Files.newBufferedWriter(Paths.get(mediaFilesPath)))
                  .useDefaultPrettyPrinter()) {
-    
+        
             jsonGenerator.writeStartArray();
-    
+        
             String[] record;
             while ((record = csvReader.readNext()) != null) {
                 totalCount++;
                 int currentLine = lineNumberReader.getLineNumber();
-    
+        
                 try {
                     // 验证记录长度
                     if (record.length < 11) {
@@ -582,11 +582,11 @@ public class FetchData {
                         skippedCount++;
                         continue;
                     }
-    
+        
                     String msgtype = record[7];
                     String sdkfileid = record[8];
                     String md5sum = record[9];
-    
+        
                     // 增强字段验证
                     if (!isValidMsgTypeForMedia(msgtype)) {
                         logger.warning(String.format("无效消息类型(行%d): %s", 
@@ -594,38 +594,38 @@ public class FetchData {
                         skippedCount++;
                         continue;
                     }
-    
+        
                     if (!sdkfileid.matches("^[A-Za-z0-9+/=]{32,}$")) {
                         logger.warning(String.format("无效SDK文件ID(行%d): %s", 
                             currentLine, sdkfileid));
                         skippedCount++;
                         continue;
                     }
-    
+        
                     if (!md5sum.matches("^[a-fA-F0-9]{32}$")) {
                         logger.warning(String.format("无效MD5(行%d): %s", 
                             currentLine, md5sum));
                         skippedCount++;
                         continue;
                     }
-    
+        
                     String taskKey = msgtype + "|" + sdkfileid + "|" + md5sum;
                     if (uniqueTaskKeys.contains(taskKey)) {
                         duplicateCount++;
                         continue;
                     }
                     uniqueTaskKeys.add(taskKey);
-    
+        
                     // 构建JSON对象
                     ObjectNode taskJson = objectMapper.createObjectNode();
                     taskJson.put("msgtype", msgtype);
                     taskJson.put("sdkfileid", sdkfileid);
                     taskJson.put("md5sum", md5sum);
-    
+        
                     jsonGenerator.writeObject(taskJson);
                     validCount++;
-    
-                } catch (CsvValidationException e) {
+        
+                } catch (IOException e) { // 替换 CsvValidationException 为 IOException
                     logger.severe(String.format("CSV解析失败(行%d): %s", currentLine, e.getMessage()));
                     // 记录原始行内容用于调试
                     try {
@@ -638,20 +638,20 @@ public class FetchData {
                     skippedCount++;
                 }
             }
-    
+        
             jsonGenerator.writeEndArray();
-    
+        
             logger.info(String.format(
                 "生成媒体文件清单完成\n总记录数: %d\n有效记录: %d\n跳过无效记录: %d\n重复记录: %d",
                 totalCount, validCount, skippedCount, duplicateCount
             ));
-    
+        
             // 警告高跳过率
             if (skippedCount > 0 && (skippedCount * 100.0 / totalCount) > 5) {
                 logger.warning(String.format("高跳过率警告: %.2f%%", 
                     (skippedCount * 100.0 / totalCount)));
             }
-    
+        
             totalTasks = validCount; // 设置总任务数
             return validCount;
         } catch (Exception e) {
