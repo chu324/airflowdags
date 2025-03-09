@@ -659,11 +659,18 @@ public class FetchData {
 
     // 新增校验方法
     private static boolean isValidMsgTypeForMedia(String msgtype) {
-        return switch (msgtype) {
-            case "image", "voice", "video", "emotion", "file" -> true;
-            default -> false;
-        };
+        switch (msgtype) {
+            case "image":
+            case "voice":
+            case "video":
+            case "emotion":
+            case "file":
+                return true;
+            default:
+                return false;
+        }
     }
+
     private static boolean isValidMD5(String md5sum) {
         return StringUtils.isNotBlank(md5sum) && md5sum.matches("[a-fA-F0-9]{32}");
     }
