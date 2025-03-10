@@ -892,7 +892,7 @@ public class FetchData {
         long startTime = System.currentTimeMillis();
         int attempt = 0;
         String indexbuf = "";
-    
+        
         try {
             while (true) {
                 try {
@@ -931,8 +931,13 @@ public class FetchData {
     
                                 byte[] data = Finance.GetData(mediaData);
                                 if (data != null && data.length > 0) {
-                                    fos.write(data);
-                                    fos.flush();
+                                    try {
+                                        fos.write(data);
+                                        fos.flush();
+                                    } catch (IOException e) {
+                                        logger.severe("写入文件失败: " + e.getMessage());
+                                        throw new SdkException(-1002, "写入文件失败: " + e.getMessage(), e);
+                                    }
                                 }
     
                                 isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
@@ -946,11 +951,16 @@ public class FetchData {
     
                         // 重命名临时文件
                         File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
-                        Files.move(
-                            tempFile.toPath(), 
-                            finalFile.toPath(), 
-                            StandardCopyOption.REPLACE_EXISTING
-                        );
+                        try {
+                            Files.move(
+                                tempFile.toPath(), 
+                                finalFile.toPath(), 
+                                StandardCopyOption.REPLACE_EXISTING
+                            );
+                        } catch (IOException e) {
+                            logger.severe("移动文件失败: " + e.getMessage());
+                            throw new SdkException(-1003, "移动文件失败: " + e.getMessage(), e);
+                        }
                         return finalFile;
                     }
                 } catch (SdkException e) {
