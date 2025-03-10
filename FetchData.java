@@ -1003,6 +1003,10 @@ public class FetchData {
         }
     }
 
+    private static boolean isRetryableError(int statusCode) {
+        return statusCode == 10001; // 仅对网络波动类错误重试
+    }
+
     private static File createTempFile(String md5sum, String msgtype) throws IOException {
         String prefix = String.format("%s_%s_", md5sum, msgtype);
         return Files.createTempFile(prefix, ".tmp").toFile();
