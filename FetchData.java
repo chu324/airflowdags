@@ -103,18 +103,24 @@ public class FetchData {
     private static final String STATUS_FAILED = "failed";
 
     // 自定义异常类（作为静态内部类）
-    public static class SdkException extends RuntimeException  {
-        private final int statusCode;  // 错误码字段
+public static class SdkException extends RuntimeException  {
+    private final int statusCode;  // 错误码字段
 
-        public SdkException(int statusCode, String message) {
-            super(message);
-            this.statusCode = statusCode;
-        }
-
-        public int getStatusCode() {
-            return statusCode;
-        }
+    public SdkException(int statusCode, String message) {
+        super(message);
+        this.statusCode = statusCode;
     }
+
+    // 新增带有Throwable参数的构造函数
+    public SdkException(int statusCode, String message, Throwable cause) {
+        super(message, cause);
+        this.statusCode = statusCode;
+    }
+
+    public int getStatusCode() {
+        return statusCode;
+    }
+}
 
     /**
      * 获取企业微信的 access_token
