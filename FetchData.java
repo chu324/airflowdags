@@ -946,11 +946,16 @@ public class FetchData {
     
                         // 重命名临时文件
                         File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
-                        Files.move(
-                            tempFile.toPath(), 
-                            finalFile.toPath(), 
-                            StandardCopyOption.REPLACE_EXISTING
-                        );
+                        try {
+                            Files.move(
+                                tempFile.toPath(), 
+                                finalFile.toPath(), 
+                                StandardCopyOption.REPLACE_EXISTING
+                            );
+                        } catch (IOException e) {
+                            logger.severe("文件移动异常: " + e.getMessage());
+                            throw new SdkException(-1, "文件移动失败", e);
+                        }
                         return finalFile;
                     }
                 } catch (SdkException e) {
@@ -1011,15 +1016,8 @@ public class FetchData {
         }
     }
 
-    private static FileOutputStream createFileOutputStream(File file) throws SdkException {
-        try {
-            return new FileOutputStream(file);
-        } catch (FileNotFoundException e) {
-            throw new SdkException(-1001, 
-                "文件未找到: " + file.getAbsolutePath(),
-                e
-            );
-        }
+    private static FileOutputStream createFileOutputStream(File file) throws IOException {
+        return new FileOutputStream(file);
     }
 
     private static boolean isRetryableError(int statusCode) {
@@ -1059,7 +1057,6 @@ public class FetchData {
             }
         }
     }
-
     private static String generateMediaFileName(String md5sum, String msgtype) {
         String extension = "";
         switch (msgtype) {
