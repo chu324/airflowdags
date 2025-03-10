@@ -946,16 +946,11 @@ public class FetchData {
     
                         // 重命名临时文件
                         File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
-                        try {
-                            Files.move(
-                                tempFile.toPath(), 
-                                finalFile.toPath(), 
-                                StandardCopyOption.REPLACE_EXISTING
-                            );
-                        } catch (IOException e) {
-                            logger.severe("文件移动异常: " + e.getMessage());
-                            throw new SdkException(-1, "文件移动失败", e);
-                        }
+                        Files.move(
+                            tempFile.toPath(), 
+                            finalFile.toPath(), 
+                            StandardCopyOption.REPLACE_EXISTING
+                        );
                         return finalFile;
                     }
                 } catch (SdkException e) {
@@ -1016,8 +1011,15 @@ public class FetchData {
         }
     }
 
-    private static FileOutputStream createFileOutputStream(File file) throws IOException {
-        return new FileOutputStream(file);
+    private static FileOutputStream createFileOutputStream(File file) throws SdkException {
+        try {
+            return new FileOutputStream(file);
+        } catch (FileNotFoundException e) {
+            throw new SdkException(-1001, 
+                "文件未找到: " + file.getAbsolutePath(),
+                e
+            );
+        }
     }
 
     private static boolean isRetryableError(int statusCode) {
@@ -1057,6 +1059,7 @@ public class FetchData {
             }
         }
     }
+
     private static String generateMediaFileName(String md5sum, String msgtype) {
         String extension = "";
         switch (msgtype) {
@@ -1260,8 +1263,12 @@ public class FetchData {
         }
     }
 
-   public static void deleteDirectoryContents(String dirPath) {
-        deleteDirContents(new File(dirPath));
+    public static void deleteDirectoryContents(String dirPath) {
+        try {
+            deleteDirContents(new File(dirPath));
+        } catch (Exception e) {
+            logger.severe("删除目录内容失败: " + e.getMessage());
+        }
     }
     
     /**
@@ -1282,7 +1289,7 @@ public class FetchData {
                     logger.fine("已删除文件: " + file);
                     return FileVisitResult.CONTINUE;
                 }
-            
+    
                 @Override
                 public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
                     if (!dir.equals(directory.toPath())) {
@@ -1300,21 +1307,24 @@ public class FetchData {
     private static String compressFile(String filePath, String zipFileName) throws IOException {
         File file = new File(filePath);
         String zipFilePath = file.getParent() + "/" + zipFileName;
-
+    
         try (FileOutputStream fos = new FileOutputStream(zipFilePath);
              ZipOutputStream zipOut = new ZipOutputStream(fos);
              FileInputStream fis = new FileInputStream(file)) {
-
+    
             ZipEntry zipEntry = new ZipEntry(file.getName());
             zipOut.putNextEntry(zipEntry);
-
+    
             byte[] bytes = new byte[1024];
             int length;
             while ((length = fis.read(bytes)) >= 0) {
                 zipOut.write(bytes, 0, length);
             }
+        } catch (IOException e) {
+            logger.severe("压缩文件失败: " + e.getMessage());
+            throw e; // 重新抛出异常
         }
-
+    
         logger.info("文件已压缩为 ZIP: " + zipFilePath);
         return zipFilePath;
     }
@@ -1349,6 +1359,9 @@ public class FetchData {
                     logger.severe("S3上传致命错误: " + e.awsErrorDetails().errorMessage());
                     throw e;
                 }
+            } catch (IOException e) {
+                logger.severe("文件路径无效或无法读取: " + e.getMessage());
+                throw new RuntimeException("文件路径无效", e);
             } catch (Exception e) {
                 logger.severe("未知上传错误: " + e.getMessage());
                 throw new RuntimeException(e);
