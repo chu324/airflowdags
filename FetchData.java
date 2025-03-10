@@ -617,8 +617,6 @@ public class FetchData {
                     String md5sum = record[9].trim();
     
                     if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum)) {
-                        logger.warning(String.format("行 %d 存在空字段 [msgtype=%s] [sdkfileid=%s] [md5sum=%s]",
-                            currentLine, msgtype, sdkfileid, md5sum));
                         skippedCount++;
                         continue;
                     }
@@ -1195,7 +1193,6 @@ public class FetchData {
                         .build(),
                     Paths.get(filePath)
                 );
-                logger.info("文件上传成功: " + s3Key);
                 return;
             } catch (S3Exception e) {
                 if (e.statusCode() == 503 || e.awsErrorDetails().errorCode().contains("SlowDown")) {
