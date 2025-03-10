@@ -905,7 +905,7 @@ public class FetchData {
                             e
                         );
                     }
-    
+        
                     // 创建文件输出流（处理FileNotFoundException）
                     try (FileOutputStream fos = createFileOutputStream(tempFile)) {
                         boolean isFinished = false;
@@ -921,14 +921,14 @@ public class FetchData {
                                     10, 
                                     mediaData
                                 );
-    
+        
                                 if (ret != 0) {
                                     throw new SdkException(ret, 
                                         "GetMediaData failed, ret=" + ret + 
                                         " sdkfileid=" + sdkfileid
                                     );
                                 }
-    
+        
                                 byte[] data = Finance.GetData(mediaData);
                                 if (data != null && data.length > 0) {
                                     try {
@@ -939,7 +939,7 @@ public class FetchData {
                                         throw new SdkException(-1002, "写入文件失败: " + e.getMessage(), e);
                                     }
                                 }
-    
+        
                                 isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
                                 if (!isFinished) {
                                     indexbuf = Finance.GetOutIndexBuf(mediaData);
@@ -948,7 +948,7 @@ public class FetchData {
                                 Finance.FreeMediaData(mediaData);
                             }
                         }
-    
+        
                         // 重命名临时文件
                         File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
                         try {
@@ -962,13 +962,16 @@ public class FetchData {
                             throw new SdkException(-1003, "移动文件失败: " + e.getMessage(), e);
                         }
                         return finalFile;
+                    } catch (IOException e) {
+                        logger.severe("文件输出流关闭失败: " + e.getMessage());
+                        throw new SdkException(-1004, "文件输出流关闭失败: " + e.getMessage(), e);
                     }
                 } catch (SdkException e) {
                     // 非重试性错误直接抛出
                     if (!isRetryableError(e.getStatusCode())) {
                         throw e;
                     }
-    
+        
                     // 检查超时
                     long elapsed = System.currentTimeMillis() - startTime;
                     if (elapsed > MAX_RETRY_DURATION) {
@@ -978,7 +981,7 @@ public class FetchData {
                             e
                         );
                     }
-    
+        
                     // 检查重试次数
                     if (attempt >= MAX_RETRIES) {
                         throw new SdkException(e.getStatusCode(), 
@@ -987,12 +990,12 @@ public class FetchData {
                             e
                         );
                     }
-    
+        
                     // 计算退避时间
                     long baseDelay = (long) Math.pow(2, attempt) * 1000;
                     long jitter = ThreadLocalRandom.current().nextLong(500, 1500);
                     long sleepTime = Math.min(baseDelay + jitter, MAX_SLEEP);
-    
+        
                     // 记录日志
                     logger.warning(String.format(
                         "[媒体下载重试] 文件:%s 类型:%-6s 第%02d次重试 " +
@@ -1002,7 +1005,7 @@ public class FetchData {
                         sleepTime / 1000.0,
                         elapsed / 1000.0
                     ));
-    
+        
                     // 休眠处理
                     try {
                         Thread.sleep(sleepTime);
@@ -1010,7 +1013,7 @@ public class FetchData {
                         Thread.currentThread().interrupt();
                         throw new SdkException(-1, "下载任务被中断", ie);
                     }
-    
+        
                     attempt++;
                     cleanTempFile(tempFile);
                     tempFile = null;
@@ -1020,7 +1023,6 @@ public class FetchData {
             cleanTempFile(tempFile);
         }
     }
-
     private static FileOutputStream createFileOutputStream(File file) throws SdkException {
         try {
             return new FileOutputStream(file);
