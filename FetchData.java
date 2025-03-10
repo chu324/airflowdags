@@ -887,26 +887,24 @@ public class FetchData {
         final int MAX_RETRIES = 10;
         final long MAX_RETRY_DURATION = 30 * 60 * 1000; // 30分钟
         final long MAX_SLEEP = 30_000; // 30秒
-        
-        File tempFile = null;
-        long startTime = System.currentTimeMillis();
-        int attempt = 0;
-        String indexbuf = "";
-        
+    
+        // 任务开始时间
+        final long taskStartTime = System.currentTimeMillis();
+        int attempt = 0; // 重试次数计数器
+        File tempFile = null; // 临时文件
+        String indexbuf = ""; // 分片下载索引
+    
         try {
             while (true) {
                 try {
-                    // 创建临时文件（处理IOException）
+                    // 创建临时文件
                     try {
                         tempFile = createTempFile(md5sum, msgtype);
                     } catch (IOException e) {
-                        throw new SdkException(-1000, 
-                            "创建临时文件失败: " + e.getMessage(), 
-                            e
-                        );
+                        throw new SdkException(-1000, "创建临时文件失败: " + e.getMessage(), e);
                     }
-        
-                    // 创建文件输出流（处理FileNotFoundException）
+    
+                    // 创建文件输出流
                     try (FileOutputStream fos = createFileOutputStream(tempFile)) {
                         boolean isFinished = false;
                         while (!isFinished) {
@@ -921,14 +919,11 @@ public class FetchData {
                                     10, 
                                     mediaData
                                 );
-        
+    
                                 if (ret != 0) {
-                                    throw new SdkException(ret, 
-                                        "GetMediaData failed, ret=" + ret + 
-                                        " sdkfileid=" + sdkfileid
-                                    );
+                                    throw new SdkException(ret, "GetMediaData failed, ret=" + ret + " sdkfileid=" + sdkfileid);
                                 }
-        
+    
                                 byte[] data = Finance.GetData(mediaData);
                                 if (data != null && data.length > 0) {
                                     try {
@@ -939,7 +934,7 @@ public class FetchData {
                                         throw new SdkException(-1002, "写入文件失败: " + e.getMessage(), e);
                                     }
                                 }
-        
+    
                                 isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
                                 if (!isFinished) {
                                     indexbuf = Finance.GetOutIndexBuf(mediaData);
@@ -948,19 +943,24 @@ public class FetchData {
                                 Finance.FreeMediaData(mediaData);
                             }
                         }
-        
+    
                         // 重命名临时文件
                         File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
                         try {
-                            Files.move(
-                                tempFile.toPath(), 
-                                finalFile.toPath(), 
-                                StandardCopyOption.REPLACE_EXISTING
-                            );
+                            Files.move(tempFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
                         } catch (IOException e) {
                             logger.severe("移动文件失败: " + e.getMessage());
                             throw new SdkException(-1003, "移动文件失败: " + e.getMessage(), e);
                         }
+    
+                        // 记录成功日志
+                        long totalTime = System.currentTimeMillis() - taskStartTime;
+                        double fileSizeMB = finalFile.length() / (1024.0 * 1024.0);
+                        logger.info(String.format(
+                            "[媒体下载重试成功] 文件:%s 类型:%-6s 重试次数:%d 总耗时:%.1fs 文件大小:%.2fMB",
+                            md5sum, msgtype, attempt, totalTime / 1000.0, fileSizeMB
+                        ));
+    
                         return finalFile;
                     } catch (IOException e) {
                         logger.severe("文件输出流关闭失败: " + e.getMessage());
@@ -971,41 +971,52 @@ public class FetchData {
                     if (!isRetryableError(e.getStatusCode())) {
                         throw e;
                     }
-        
+    
                     // 检查超时
-                    long elapsed = System.currentTimeMillis() - startTime;
+                    long elapsed = System.currentTimeMillis() - taskStartTime;
                     if (elapsed > MAX_RETRY_DURATION) {
+                        // 记录失败日志
+                        String errorReason = classifyError(e.getStatusCode());
+                        logger.severe(String.format(
+                            "[媒体下载重试失败] 文件:%s 类型:%-6s 错误码:%d 重试次数:%d 累计耗时:%.1fs 错误原因:%s",
+                            md5sum, msgtype, e.getStatusCode(), attempt, elapsed / 1000.0, errorReason
+                        ));
                         throw new SdkException(e.getStatusCode(), 
-                            "超过最大重试时间(" + MAX_RETRY_DURATION/60000 + "分钟)" +
+                            "超过最大重试时间(" + MAX_RETRY_DURATION / 60000 + "分钟)" +
                             " last_error=" + e.getMessage(),
                             e
                         );
                     }
-        
+    
                     // 检查重试次数
                     if (attempt >= MAX_RETRIES) {
+                        // 记录失败日志
+                        String errorReason = classifyError(e.getStatusCode());
+                        logger.severe(String.format(
+                            "[媒体下载重试失败] 文件:%s 类型:%-6s 错误码:%d 重试次数:%d 累计耗时:%.1fs 错误原因:%s",
+                            md5sum, msgtype, e.getStatusCode(), attempt, elapsed / 1000.0, errorReason
+                        ));
                         throw new SdkException(e.getStatusCode(), 
                             "超过最大重试次数(" + MAX_RETRIES + ")" +
                             " last_error=" + e.getMessage(),
                             e
                         );
                     }
-        
+    
                     // 计算退避时间
                     long baseDelay = (long) Math.pow(2, attempt) * 1000;
                     long jitter = ThreadLocalRandom.current().nextLong(500, 1500);
                     long sleepTime = Math.min(baseDelay + jitter, MAX_SLEEP);
-        
-                    // 记录日志
+    
+                    // 记录重试日志
                     logger.warning(String.format(
-                        "[媒体下载重试] 文件:%s 类型:%-6s 第%02d次重试 " +
-                        "错误码:%d 休眠:%.1fs 累计耗时:%.1fs",
+                        "[媒体下载重试] 文件:%s 类型:%-6s 第%02d次重试 错误码:%d 休眠:%.1fs 累计耗时:%.1fs",
                         md5sum, msgtype, attempt + 1,
                         e.getStatusCode(),
                         sleepTime / 1000.0,
                         elapsed / 1000.0
                     ));
-        
+    
                     // 休眠处理
                     try {
                         Thread.sleep(sleepTime);
@@ -1013,7 +1024,7 @@ public class FetchData {
                         Thread.currentThread().interrupt();
                         throw new SdkException(-1, "下载任务被中断", ie);
                     }
-        
+    
                     attempt++;
                     cleanTempFile(tempFile);
                     tempFile = null;
@@ -1023,22 +1034,26 @@ public class FetchData {
             cleanTempFile(tempFile);
         }
     }
+
+    private static String classifyError(int statusCode) {
+        switch (statusCode) {
+            case 10001: return "网络波动";
+            case -1000: return "临时文件错误";
+            case -1001: return "文件IO异常";
+            default:    return "未知错误(" + statusCode + ")";
+        }
+    }
+
     private static FileOutputStream createFileOutputStream(File file) throws SdkException {
         try {
             return new FileOutputStream(file);
         } catch (FileNotFoundException e) {
-            throw new SdkException(-1001, 
-                "文件未找到: " + file.getAbsolutePath(),
-                e
-            );
+            throw new SdkException(-1001, "文件未找到: " + file.getAbsolutePath(), e);
         }
     }
 
     private static boolean isRetryableError(int statusCode) {
-        // 扩展可重试错误码列表
-        return statusCode == 10001 ||   // 网络波动
-               statusCode == -1000 ||   // 临时文件创建失败
-               statusCode == -1001;     // 文件未找到（可能因临时文件清理导致）
+        return statusCode == 10001 || statusCode == -1000 || statusCode == -1001;
     }
 
     private static File createTempFile(String md5sum, String msgtype) throws IOException {
