@@ -871,49 +871,165 @@ public class FetchData {
         }
     }
 
-    private static File downloadMediaFile(long sdk, String sdkfileid, String md5sum, String msgtype) {
-        String indexbuf = "";
+    private static File downloadMediaFile(
+        long sdk, 
+        String sdkfileid, 
+        String md5sum, 
+        String msgtype
+    ) throws SdkException {
+        // 重试策略参数配置
+        final int MAX_RETRIES = 10;              // 单任务最大重试次数
+        final long MAX_RETRY_DURATION = 30 * 60 * 1000; // 30分钟最大重试总时长
+        final long MAX_SLEEP = 30_000;           // 单次最大休眠时间(30秒)
+        
         File tempFile = null;
+        long startTime = System.currentTimeMillis();
+        int attempt = 0;
+        String indexbuf = ""; // 断点续传标识（企业微信SDK用）
     
         try {
-            // 创建临时文件
-            tempFile = File.createTempFile(md5sum + "_", ".tmp");
+            while (true) {
+                try {
+                    // 创建临时文件（确保线程安全）
+                    tempFile = createTempFile(md5sum, msgtype);
+                    
+                    // 核心下载逻辑
+                    try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                        boolean isFinished = false;
+                        while (!isFinished) {
+                            long mediaData = Finance.NewMediaData();
+                            try {
+                                // 调用SDK获取媒体数据（带断点）
+                                int ret = Finance.GetMediaData(
+                                    sdk, 
+                                    indexbuf, 
+                                    sdkfileid, 
+                                    null, 
+                                    null, 
+                                    10, 
+                                    mediaData
+                                );
     
-            // 下载媒体文件
-            try (FileOutputStream fos = new FileOutputStream(tempFile)) {
-                boolean isFinished = false;
-                while (!isFinished) {
-                    long mediaData = Finance.NewMediaData();
-                    try {
-                        int ret = Finance.GetMediaData(sdk, indexbuf, sdkfileid, null, null, 10, mediaData);
-                        if (ret != 0) {
-                            throw new SdkException(ret, "GetMediaData failed, ret=" + ret);
-                        }
+                                // 检查返回码
+                                if (ret != 0) {
+                                    throw new SdkException(ret, 
+                                        "GetMediaData failed, ret=" + ret + 
+                                        " sdkfileid=" + sdkfileid
+                                    );
+                                }
     
-                        byte[] data = Finance.GetData(mediaData);
-                        fos.write(data);
-                        isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
-                        if (!isFinished) {
-                            indexbuf = Finance.GetOutIndexBuf(mediaData);
-                        }
-                    } finally {
-                        Finance.FreeMediaData(mediaData);
+                                // 写入数据
+                                byte[] data = Finance.GetData(mediaData);
+                                if (data != null && data.length > 0) {
+                                    fos.write(data);
+                                    fos.flush();
+                                }
+    
+                                // 更新断点状态
+                                isFinished = Finance.IsMediaDataFinish(mediaData) == 1;
+                                if (!isFinished) {
+                                    indexbuf = Finance.GetOutIndexBuf(mediaData);
+                                }
+                            } finally {
+                                Finance.FreeMediaData(mediaData);
+                            }
+                        } // end while(!isFinished)
+                    } // end try-with-resources
+    
+                    // 下载成功，重命名文件
+                    File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
+                    Files.move(
+                        tempFile.toPath(), 
+                        finalFile.toPath(), 
+                        StandardCopyOption.REPLACE_EXISTING
+                    );
+                    return finalFile;
+    
+                } catch (SdkException e) {
+                    // 非重试性错误直接抛出
+                    if (!isRetryableError(e.getStatusCode())) {
+                        throw e;
                     }
+    
+                    // 检查是否超时
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    if (elapsed > MAX_RETRY_DURATION) {
+                        throw new SdkException(e.getStatusCode(), 
+                            "超过最大重试时间(" + MAX_RETRY_DURATION/60000 + "分钟)" +
+                            " last_error=" + e.getMessage()
+                        );
+                    }
+    
+                    // 检查重试次数
+                    if (attempt >= MAX_RETRIES) {
+                        throw new SdkException(e.getStatusCode(), 
+                            "超过最大重试次数(" + MAX_RETRIES + ")" +
+                            " last_error=" + e.getMessage()
+                        );
+                    }
+    
+                    // 计算退避时间（指数退避 + 随机抖动）
+                    long baseDelay = (long) Math.pow(2, attempt) * 1000;
+                    long jitter = ThreadLocalRandom.current().nextLong(500, 1500);
+                    long sleepTime = Math.min(baseDelay + jitter, MAX_SLEEP);
+    
+                    // 记录重试日志
+                    logger.warning(String.format(
+                        "[媒体下载重试] 文件:%s 类型:%-6s 第%02d次重试 " +
+                        "错误码:%d 休眠:%.1fs 累计耗时:%.1fs",
+                        md5sum, 
+                        msgtype, 
+                        attempt + 1,
+                        e.getStatusCode(),
+                        sleepTime / 1000.0,
+                        elapsed / 1000.0
+                    ));
+    
+                    // 休眠（允许中断）
+                    try {
+                        Thread.sleep(sleepTime);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new SdkException(-1, "下载任务被中断");
+                    }
+    
+                    attempt++;
+                    cleanTempFile(tempFile); // 清理可能损坏的临时文件
+                    tempFile = null;         // 下次循环会重新创建
                 }
-            }
-    
-            // 生成最终文件名并重命名临时文件
-            String finalFileName = generateMediaFileName(md5sum, msgtype);
-            File finalFile = new File(tempFile.getParent(), finalFileName);
-            Files.move(tempFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-    
-            return finalFile;
-        } catch (Exception e) {
-            logger.severe("媒体文件下载失败: " + e.getMessage());
-            return null;
+            } // end while(true)
         } finally {
-            if (tempFile != null && tempFile.exists()) {
-                tempFile.delete();
+            cleanTempFile(tempFile); // 确保最终清理
+        }
+    }
+
+    private static File createTempFile(String md5sum, String msgtype) throws IOException {
+        String prefix = String.format("%s_%s_", md5sum, msgtype);
+        return Files.createTempFile(prefix, ".tmp").toFile();
+    }
+
+    private static File buildFinalFile(File tempFile, String md5sum, String msgtype) {
+        String ext = getFileExtension(msgtype);
+        String fileName = md5sum + ext;
+        return new File(tempFile.getParent(), fileName);
+    }
+
+    private static String getFileExtension(String msgtype) {
+        switch (msgtype.toLowerCase()) {
+            case "image": return ".jpg";
+            case "voice": return ".mp3";
+            case "video": return ".mp4";
+            case "file":  return ".bin";
+            default:      return ".dat";
+        }
+    }
+
+    private static void cleanTempFile(File file) {
+        if (file != null && file.exists()) {
+            try {
+                Files.deleteIfExists(file.toPath());
+            } catch (IOException e) {
+                logger.warning("清理临时文件失败: " + file.getAbsolutePath());
             }
         }
     }
