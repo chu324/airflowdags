@@ -76,12 +76,12 @@ public class FetchData {
         .region(Region.CN_NORTH_1)
         .overrideConfiguration(c -> c
             .retryPolicy(RetryPolicy.builder()
-                .numRetries(3)
+                .numRetries(5)
                 .backoffStrategy(BackoffStrategy.defaultThrottlingStrategy())
                 .retryCondition(RetryOnStatusCodeCondition.create(403, 429, 500, 503))
                 .build()
             )
-            .apiCallTimeout(Duration.ofSeconds(30))  // 添加超时控制
+            .apiCallTimeout(Duration.ofMinutes(5))  // 添加超时控制
         )
         .httpClient(UrlConnectionHttpClient.create())
         .build();
