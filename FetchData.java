@@ -956,10 +956,12 @@ public class FetchData {
                         // 记录成功日志
                         long totalTime = System.currentTimeMillis() - taskStartTime;
                         double fileSizeMB = finalFile.length() / (1024.0 * 1024.0);
-                        logger.info(String.format(
-                            "[媒体下载重试成功] 文件:%s 类型:%-6s 重试次数:%d 总耗时:%.1fs 文件大小:%.2fMB",
-                            md5sum, msgtype, attempt, totalTime / 1000.0, fileSizeMB
-                        ));
+                        if (attempt > 0) { // 仅在重试次数>0时记录
+                            logger.info(String.format(
+                                "[媒体下载重试成功] 文件:%s 类型:%-6s 重试次数:%d 总耗时:%.1fs 文件大小:%.2fMB",
+                                md5sum, msgtype, attempt, totalTime / 1000.0, fileSizeMB
+                            ));
+                        }
     
                         return finalFile;
                     } catch (IOException e) {
