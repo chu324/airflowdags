@@ -64,8 +64,12 @@ public class FetchData {
     public static String taskDateStr = null; // 用于存储任务开始时的日期
 
     // 定义 S3 存储桶名称
-    private static final String s3BucketName = "175826060701-tprdevsftp-sftp-dev-cn-north-1"; // raw 和 curated 文件
-    private static final String mediaS3BucketName = "175826060701-eds-qa-cn-north-1"; // 媒体文件
+    private static final String s3BucketName = "prd".equalsIgnoreCase(System.getenv("env")) 
+    ? "175814205108-datafabric-sftp-prd-cn-north-1" 
+    : "175826060701-tprdevsftp-sftp-dev-cn-north-1";
+    private static final String mediaS3BucketName = "prd".equalsIgnoreCase(System.getenv("env")) 
+    ? "175814205108-eds-prd-cn-north-1" 
+    : "175826060701-eds-qa-cn-north-1";
 
     private static final S3Client s3Client = S3Client.builder()
         .credentialsProvider(DefaultCredentialsProvider.create())
