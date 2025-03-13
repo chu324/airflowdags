@@ -331,11 +331,11 @@ public class FetchData {
                 long ret = Finance.GetChatData(sdk, lastSeq, limit, "", "", 10, slice);
     
                 if (ret != 0) {
-                    if (ret == 10001) {
+                    if (ret == 10001 || ret == 10002) {
                         if (!isInRetryPeriod) {
                             isInRetryPeriod = true;
                             retryStartTime = System.currentTimeMillis();
-                            logger.info("检测到 ret 10001，开始记录波动时间，retryStartTime: " + retryStartTime);
+                            logger.info("检测到 ret " + ret + "，开始记录波动时间，retryStartTime: " + retryStartTime);
                         }
                         long elapsedTime = System.currentTimeMillis() - retryStartTime;
                         if (elapsedTime < MAX_RETRY_TIME) {
@@ -1044,6 +1044,7 @@ public class FetchData {
     private static String classifyError(int statusCode) {
         switch (statusCode) {
             case 10001: return "网络波动";
+            case 10002: return "数据解析失败";
             case -1000: return "临时文件错误";
             case -1001: return "文件IO异常";
             default:    return "未知错误(" + statusCode + ")";
@@ -1059,7 +1060,7 @@ public class FetchData {
     }
 
     private static boolean isRetryableError(int statusCode) {
-        return statusCode == 10001 || statusCode == -1000 || statusCode == -1001;
+        return statusCode == 10001 || statusCode == 10002 || statusCode == -1000 || statusCode == -1001;
     }
 
     private static File createTempFile(String md5sum, String msgtype) throws IOException {
