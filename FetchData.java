@@ -653,7 +653,7 @@ public class FetchData {
                     String md5sum = record[9].trim();
                     String fileext = record[10].trim(); // 从 CSV 文件中读取 fileext
     
-                    if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum, fileext)) {
+                    if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum)) {
                         skippedCount++;
                         continue;
                     }
@@ -674,6 +674,11 @@ public class FetchData {
                         logger.warning(String.format("行 %d 无效MD5格式: %s", currentLine, md5sum));
                         skippedCount++;
                         continue;
+                    }
+    
+                    // 为非 file 类型的媒体文件设置默认扩展名
+                    if (!"file".equals(msgtype)) {
+                        fileext = getDefaultFileExt(msgtype);
                     }
     
                     String uniqueKey = msgtype + "|" + md5sum;
@@ -719,7 +724,21 @@ public class FetchData {
             return -1;
         }
     }
-    
+
+    private static String getDefaultFileExt(String msgtype) {
+        switch (msgtype.toLowerCase()) {
+            case "image":
+                return "jpg";
+            case "voice":
+                return "mp3";
+            case "video":
+                return "mp4";
+            case "emotion":
+                return "gif";
+            default:
+                return "dat";
+        }
+    }
     // 新增校验方法
     private static boolean isValidMsgTypeForMedia(String msgtype) {
         if (StringUtils.isBlank(msgtype)) return false;
