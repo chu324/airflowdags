@@ -460,14 +460,25 @@ public class FetchData {
         int failureCount = 0;
         List<String> failureDetails = new ArrayList<>();
     
+        String tmpChatFilePath = curatedFilePath.replace("chat_", "tmp_chat_");
+        String newChatFilePath = curatedFilePath;
+    
         try (BufferedReader rawReader = new BufferedReader(new FileReader(rawFilePath));
-             BufferedWriter curatedWriter = new BufferedWriter(new FileWriter(curatedFilePath, true))) {
+             BufferedWriter tmpChatWriter = new BufferedWriter(new FileWriter(tmpChatFilePath, true));
+             BufferedWriter newChatWriter = new BufferedWriter(new FileWriter(newChatFilePath, true))) {
     
             // 添加表头（包含 fileext 字段）
-            if (new File(curatedFilePath).length() == 0) {
-                String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,fileext,raw_json";
-                curatedWriter.write(header);
-                curatedWriter.newLine();
+            if (new File(tmpChatFilePath).length() == 0) {
+                String tmpHeader = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,fileext,raw_json";
+                tmpChatWriter.write(tmpHeader);
+                tmpChatWriter.newLine();
+            }
+    
+            // 添加表头（去掉 fileext 字段）
+            if (new File(newChatFilePath).length() == 0) {
+                String newHeader = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,raw_json";
+                newChatWriter.write(newHeader);
+                newChatWriter.newLine();
             }
     
             String line;
@@ -533,23 +544,42 @@ public class FetchData {
     
                     String escapedRawJson = escapeCsvField(rawJson);
     
-                    // 写入 curated 文件（包含 fileext 字段）
+                    // 写入 tmp_chat 文件（包含 fileext 字段）
                     if (tolistNode.isArray()) {
                         for (JsonNode to : tolistNode) {
                             String receiver = to.asText();
-                            curatedWriter.write(String.join(",",
+                            tmpChatWriter.write(String.join(",",
                                 seqStr, msgid, action, sender, receiver, roomid,
                                 beijingTimeStr, msgtype, sdkfileid, md5sum, fileext, escapedRawJson
                             ));
-                            curatedWriter.newLine();
+                            tmpChatWriter.newLine();
                         }
                     } else {
                         String receiver = tolistNode.toString();
-                        curatedWriter.write(String.join(",",
+                        tmpChatWriter.write(String.join(",",
                             seqStr, msgid, action, sender, receiver, roomid,
                             beijingTimeStr, msgtype, sdkfileid, md5sum, fileext, escapedRawJson
                         ));
-                        curatedWriter.newLine();
+                        tmpChatWriter.newLine();
+                    }
+    
+                    // 写入 chat 文件（去掉 fileext 字段）
+                    if (tolistNode.isArray()) {
+                        for (JsonNode to : tolistNode) {
+                            String receiver = to.asText();
+                            newChatWriter.write(String.join(",",
+                                seqStr, msgid, action, sender, receiver, roomid,
+                                beijingTimeStr, msgtype, sdkfileid, md5sum, escapedRawJson
+                            ));
+                            newChatWriter.newLine();
+                        }
+                    } else {
+                        String receiver = tolistNode.toString();
+                        newChatWriter.write(String.join(",",
+                            seqStr, msgid, action, sender, receiver, roomid,
+                            beijingTimeStr, msgtype, sdkfileid, md5sum, escapedRawJson
+                        ));
+                        newChatWriter.newLine();
                     }
                 }
             }
