@@ -716,11 +716,17 @@ public class FetchData {
         String errorMsg = "";
         String msgtype = "";
         String sdkfileid = "";
+        String fileext = ""; // 新增 fileext 字段
     
         try {
             msgtype = taskNode.path("msgtype").asText();
             sdkfileid = taskNode.path("sdkfileid").asText();
             String md5sum = taskNode.path("md5sum").asText();
+    
+            // 对于 file 类型，提取 fileext 字段
+            if ("file".equals(msgtype)) {
+                fileext = taskNode.path("file").path("fileext").asText();
+            }
     
             // 防御性校验
             if (!isValidMsgTypeForMedia(msgtype) || !isValidSDKFileId(sdkfileid) || !isValidMD5(md5sum)) {
@@ -729,14 +735,14 @@ public class FetchData {
             }
     
             // 下载媒体文件
-            File mediaFile = downloadMediaFile(sdk, sdkfileid, md5sum, msgtype);
+            File mediaFile = downloadMediaFile(sdk, sdkfileid, md5sum, msgtype, fileext); // 修改此处
             if (mediaFile == null) {
                 errorMsg = "Download failed";
                 throw new IOException(errorMsg);
             }
     
             // 上传到S3
-            String s3Key = getMediaS3Key(msgtype, md5sum);
+            String s3Key = getMediaS3Key(msgtype, md5sum, fileext); // 修改此处
             uploadFileToS3(mediaFile.getAbsolutePath(), mediaS3BucketName, s3Key);
     
             // 清理临时文件
@@ -885,7 +891,8 @@ public class FetchData {
         long sdk, 
         String sdkfileid, 
         String md5sum, 
-        String msgtype
+        String msgtype,
+        String fileext
     ) throws SdkException {
         // 重试策略参数配置
         final int MAX_RETRIES = 10;
@@ -949,7 +956,7 @@ public class FetchData {
                         }
     
                         // 重命名临时文件
-                        File finalFile = buildFinalFile(tempFile, md5sum, msgtype);
+                        File finalFile = buildFinalFile(tempFile, md5sum, msgtype, fileext);
                         try {
                             Files.move(tempFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
                         } catch (IOException e) {
@@ -1068,18 +1075,19 @@ public class FetchData {
         return Files.createTempFile(prefix, ".tmp").toFile();
     }
 
-    private static File buildFinalFile(File tempFile, String md5sum, String msgtype) {
-        String ext = getFileExtension(msgtype);
+    private static File buildFinalFile(File tempFile, String md5sum, String msgtype, String fileext) {
+        String ext = getFileExtension(msgtype, fileext);
         String fileName = md5sum + ext;
         return new File(tempFile.getParent(), fileName);
     }
 
-    private static String getFileExtension(String msgtype) {
+    private static String getFileExtension(String msgtype, String fileext) {
         switch (msgtype.toLowerCase()) {
             case "image": return ".jpg";
             case "voice": return ".mp3";
             case "video": return ".mp4";
-            case "file":  return ".bin";
+            case "emotion": return ".gif";
+            case "file":  return "." + fileext; // 使用 fileext 作为扩展名
             default:      return ".dat";
         }
     }
@@ -1094,7 +1102,7 @@ public class FetchData {
         }
     }
 
-    private static String generateMediaFileName(String md5sum, String msgtype) {
+    private static String generateMediaFileName(String md5sum, String msgtype, String fileext) {
         String extension = "";
         switch (msgtype) {
             case "image":
@@ -1110,7 +1118,7 @@ public class FetchData {
                 extension = ".gif";
                 break;
             case "file":
-                extension = ".bin";
+                extension = "." + fileext; // 使用 fileext 作为扩展名
                 break;
             default:
                 extension = ".dat";
@@ -1118,11 +1126,11 @@ public class FetchData {
         return md5sum + extension;
     }
 
-    private static String getMediaS3Key(String msgtype, String md5sum) {
+    private static String getMediaS3Key(String msgtype, String md5sum, String fileext) {
         String safeMsgType = isValidMsgType(msgtype) ? msgtype : "unknown";
         return String.format("raw/wecom_chat/media/%s/%s",
             safeMsgType,
-            generateMediaFileName(md5sum, msgtype)
+            generateMediaFileName(md5sum, msgtype, fileext)
         );
     }
             
