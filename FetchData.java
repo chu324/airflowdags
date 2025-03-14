@@ -463,7 +463,7 @@ public class FetchData {
         try (BufferedReader rawReader = new BufferedReader(new FileReader(rawFilePath));
              BufferedWriter curatedWriter = new BufferedWriter(new FileWriter(curatedFilePath, true))) {
     
-            // 添加表头（新增 md5sum 列）
+            // 添加表头（不包含 fileext 字段）
             if (new File(curatedFilePath).length() == 0) {
                 String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,raw_json";
                 curatedWriter.write(header);
@@ -513,6 +513,7 @@ public class FetchData {
                     String msgtype = decryptedRootNode.path("msgtype").asText();
                     String sdkfileid = extractSeqFileId(decryptedRootNode, msgtype);
                     String md5sum = extractMd5Sum(decryptedRootNode, msgtype);
+                    String fileext = extractFileExt(decryptedRootNode, msgtype); // 提取 fileext
     
                     JsonNode rawJsonNode = decryptedRootNode.path(msgtype);
                     String rawJson;
@@ -532,7 +533,7 @@ public class FetchData {
     
                     String escapedRawJson = escapeCsvField(rawJson);
     
-                    // 写入 curated 文件
+                    // 写入 curated 文件（不包含 fileext 字段）
                     if (tolistNode.isArray()) {
                         for (JsonNode to : tolistNode) {
                             String receiver = to.asText();
@@ -570,6 +571,19 @@ public class FetchData {
         return msgTypeNode.has("md5sum") ? msgTypeNode.path("md5sum").asText() : "";
     }
 
+    private static String extractFileExt(JsonNode decryptedRootNode, String msgtype) {
+        if (!"file".equals(msgtype)) {
+            return ""; // 只有文件类型才有 fileext
+        }
+    
+        JsonNode fileNode = decryptedRootNode.path("file");
+        if (fileNode.isMissingNode()) {
+            return "";
+        }
+    
+        return fileNode.path("fileext").asText("");
+    }
+
     /**
      * 生成媒体文件清单JSON，返回有效任务数
      */
@@ -580,12 +594,11 @@ public class FetchData {
         int totalCount = 0;
         Set<String> uniqueTaskKeys = new HashSet<>();
     
-        // 配置更宽松的CSV解析器
         CSVParser parser = new CSVParserBuilder()
             .withSeparator(',')
             .withQuoteChar('"')
             .withEscapeChar('\\')
-            .withIgnoreQuotations(true) // 允许非严格模式
+            .withIgnoreQuotations(true)
             .withStrictQuotes(false)
             .build();
     
@@ -616,8 +629,8 @@ public class FetchData {
                 int currentLine = lineNumberReader.getLineNumber();
     
                 try {
-                    if (record.length < 10) {
-                        logger.warning(String.format("行 %d 字段不足（%d/10），跳过处理", currentLine, record.length));
+                    if (record.length < 11) { // 确保有足够的字段
+                        logger.warning(String.format("行 %d 字段不足（%d/11），跳过处理", currentLine, record.length));
                         skippedCount++;
                         continue;
                     }
@@ -625,8 +638,9 @@ public class FetchData {
                     String msgtype = record[7].trim();
                     String sdkfileid = record[8].trim();
                     String md5sum = record[9].trim();
+                    String fileext = record[10].trim(); // 从 CSV 文件中读取 fileext
     
-                    if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum)) {
+                    if (StringUtils.isAnyBlank(msgtype, sdkfileid, md5sum, fileext)) {
                         skippedCount++;
                         continue;
                     }
@@ -661,6 +675,7 @@ public class FetchData {
                     taskJson.put("msgtype", msgtype);
                     taskJson.put("sdkfileid", sdkfileid);
                     taskJson.put("md5sum", md5sum);
+                    taskJson.put("fileext", fileext); // 添加 fileext 字段
                     jsonGenerator.writeObject(taskJson);
                     validCount++;
     
@@ -722,11 +737,7 @@ public class FetchData {
             msgtype = taskNode.path("msgtype").asText();
             sdkfileid = taskNode.path("sdkfileid").asText();
             String md5sum = taskNode.path("md5sum").asText();
-    
-            // 对于 file 类型，提取 fileext 字段
-            if ("file".equals(msgtype)) {
-                fileext = taskNode.path("file").path("fileext").asText();
-            }
+            fileext = taskNode.path("fileext").asText(); // 从 JSON 中读取 fileext
     
             // 防御性校验
             if (!isValidMsgTypeForMedia(msgtype) || !isValidSDKFileId(sdkfileid) || !isValidMD5(md5sum)) {
@@ -735,14 +746,14 @@ public class FetchData {
             }
     
             // 下载媒体文件
-            File mediaFile = downloadMediaFile(sdk, sdkfileid, md5sum, msgtype, fileext); // 修改此处
+            File mediaFile = downloadMediaFile(sdk, sdkfileid, md5sum, msgtype, fileext);
             if (mediaFile == null) {
                 errorMsg = "Download failed";
                 throw new IOException(errorMsg);
             }
     
-            // 上传到S3
-            String s3Key = getMediaS3Key(msgtype, md5sum, fileext); // 修改此处
+            // 上传到 S3
+            String s3Key = getMediaS3Key(msgtype, md5sum, fileext);
             uploadFileToS3(mediaFile.getAbsolutePath(), mediaS3BucketName, s3Key);
     
             // 清理临时文件
