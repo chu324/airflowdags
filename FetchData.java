@@ -856,43 +856,6 @@ public class FetchData {
         }
     }
 
-    private static String extractContent(JsonNode rootNode, String msgtype) {
-        try {
-            switch (msgtype) {
-                case "text":
-                    return rootNode.path("text").path("content").asText();
-                case "revoke":
-                    return rootNode.path("revoke").path("pre_msgid").asText();
-                case "disagree":
-                case "agree":
-                    return rootNode.path("userid").asText();
-                case "card":
-                    String corpname = rootNode.path("corpname").asText();
-                    String userid = rootNode.path("userid").asText();
-                    return corpname + "_" + userid;
-                case "location":
-                    return rootNode.path("address").asText();
-                case "link":
-                    return rootNode.path("link_url").asText();
-                case "weapp":
-                    return rootNode.path("displayname").asText();
-                case "image":
-                case "voice":
-                case "video":
-                case "emotion":
-                case "file":
-                    // 对于媒体类型，返回空字符串或特定字段
-                    return rootNode.path("content").asText(); // 假设媒体类型也有 content 字段
-                default:
-                    // 对于未处理的 msgtype，返回空字符串或默认值
-                    return "";
-            }
-        } catch (Exception e) {
-            logger.severe("提取消息内容失败: " + e.getMessage());
-            return "";
-        }
-    }
-
     private static String extractSeqFileId(JsonNode decryptedRootNode, String msgtype) {
         // 增加sdkfileid有效性校验
         if (!isValidMsgTypeForMedia(msgtype)) return "";
