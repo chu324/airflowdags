@@ -463,9 +463,9 @@ public class FetchData {
         try (BufferedReader rawReader = new BufferedReader(new FileReader(rawFilePath));
              BufferedWriter curatedWriter = new BufferedWriter(new FileWriter(curatedFilePath, true))) {
     
-            // 添加表头（不包含 fileext 字段）
+            // 添加表头（包含 fileext 字段）
             if (new File(curatedFilePath).length() == 0) {
-                String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,raw_json";
+                String header = "seq,msgid,action,sender,receiver,roomid,msgtime,msgtype,sdkfileid,md5sum,fileext,raw_json";
                 curatedWriter.write(header);
                 curatedWriter.newLine();
             }
@@ -533,13 +533,13 @@ public class FetchData {
     
                     String escapedRawJson = escapeCsvField(rawJson);
     
-                    // 写入 curated 文件（不包含 fileext 字段）
+                    // 写入 curated 文件（包含 fileext 字段）
                     if (tolistNode.isArray()) {
                         for (JsonNode to : tolistNode) {
                             String receiver = to.asText();
                             curatedWriter.write(String.join(",",
                                 seqStr, msgid, action, sender, receiver, roomid,
-                                beijingTimeStr, msgtype, sdkfileid, md5sum, escapedRawJson
+                                beijingTimeStr, msgtype, sdkfileid, md5sum, fileext, escapedRawJson
                             ));
                             curatedWriter.newLine();
                         }
@@ -547,7 +547,7 @@ public class FetchData {
                         String receiver = tolistNode.toString();
                         curatedWriter.write(String.join(",",
                             seqStr, msgid, action, sender, receiver, roomid,
-                            beijingTimeStr, msgtype, sdkfileid, md5sum, escapedRawJson
+                            beijingTimeStr, msgtype, sdkfileid, md5sum, fileext, escapedRawJson
                         ));
                         curatedWriter.newLine();
                     }
@@ -581,7 +581,20 @@ public class FetchData {
             return "";
         }
     
-        return fileNode.path("fileext").asText("");
+        // 确保 fileext 是一个简单的字符串，而不是 JSON 格式的字符串
+        String fileext = fileNode.path("fileext").asText("");
+        if (fileext.startsWith("{") && fileext.endsWith("}")) {
+            try {
+                JsonNode fileextNode = objectMapper.readTree(fileext);
+                if (fileextNode.has("fileext")) {
+                    return fileextNode.path("fileext").asText("");
+                }
+            } catch (Exception e) {
+                logger.warning("fileext 格式错误: " + fileext);
+                return "";
+            }
+        }
+        return fileext;
     }
 
     /**
@@ -629,8 +642,8 @@ public class FetchData {
                 int currentLine = lineNumberReader.getLineNumber();
     
                 try {
-                    if (record.length < 11) { // 确保有足够的字段
-                        logger.warning(String.format("行 %d 字段不足（%d/11），跳过处理", currentLine, record.length));
+                    if (record.length < 12) { // 确保有足够的字段
+                        logger.warning(String.format("行 %d 字段不足（%d/12），跳过处理", currentLine, record.length));
                         skippedCount++;
                         continue;
                     }
