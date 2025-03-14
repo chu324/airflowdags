@@ -1173,22 +1173,36 @@ public class FetchData {
     private static boolean downloadMediaFilesToS3(long sdk) {
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
-        String mediaFilesPath = curatedFilePath.replace("chat_", "media_files_").replace(".csv", ".json");
-    
+        // 修改此处，使用 tmp_chat_yyyymmdd.csv 文件
+        String tmpChatFilePath = curatedFilePath.replace("chat_", "tmp_chat_");
+        String mediaFilesPath = tmpChatFilePath.replace("chat_", "media_files_").replace(".csv", ".json");
+        
+        // 检查 tmpChatFilePath 文件是否存在
+        if (!new File(tmpChatFilePath).exists()) {
+            logger.severe("tmpChatFilePath 文件不存在: " + tmpChatFilePath);
+            return false;
+        }
+        
+        // 检查 mediaFilesPath 的目录是否存在，如果不存在则创建
+        File mediaFilesDir = new File(mediaFilesPath).getParentFile();
+        if (!mediaFilesDir.exists()) {
+            mediaFilesDir.mkdirs();
+        }
+        
         // 初始化日志目录
         new File("logs").mkdirs();
-    
+        
         // 生成媒体清单
-        totalTasks = generateMediaFilesJSON(curatedFilePath, mediaFilesPath);
+        totalTasks = generateMediaFilesJSON(tmpChatFilePath, mediaFilesPath);
         if (totalTasks < 0) {
             logger.severe("媒体清单生成失败");
             return false;
         }
-    
+        
         // 处理任务
         processMediaTasksStreaming(mediaFilesPath, sdk, successCount, failureCount);
         boolean finalStatus = waitForCompletion(totalTasks, successCount, failureCount);
-    
+        
         // 强制打印最终进度
         logProgress(totalTasks, successCount.get(), failureCount.get());
         
