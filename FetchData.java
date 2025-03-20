@@ -261,29 +261,33 @@ public class FetchData {
     }
 
     public static boolean fetchNewData(long sdk) {
-        System.out.println("fetchNewData method called with sdk: " + sdk);
-
-        // 设置任务日期
+        // 动态生成日期字符串（局部变量）
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
-        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai")); // 确保使用北京时间
-        taskDateStr = now.format(formatter);
-        System.out.println("Task date string: "+ taskDateStr);
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
+        String taskDate = now.format(formatter); // 不再使用静态变量
     
+        // 使用绝对路径作为基础路径
+        String basePath = "/home/tencent/source/wecom_integration/data/";
+        
         // 初始化 raw 文件路径
-        String rawDirPath = "data/raw/" + taskDateStr;
+        String rawDirPath = basePath + "raw/" + taskDate;
         File rawDir = new File(rawDirPath);
-        if (!rawDir.exists()) {
-            rawDir.mkdirs(); // 创建目录
+        if (!rawDir.exists() && !rawDir.mkdirs()) {
+            logger.severe("无法创建 raw 目录: " + rawDir.getAbsolutePath());
+            return false;
         }
-        rawFilePath = rawDirPath + "/wecom_chat_" + taskDateStr + ".csv";
+        rawFilePath = rawDirPath + "/wecom_chat_" + taskDate + ".csv";
+        logger.info("Raw 文件路径: " + rawFilePath);
     
         // 初始化 curated 文件路径
-        String curatedDirPath = "data/curated/" + taskDateStr;
+        String curatedDirPath = basePath + "curated/" + taskDate;
         File curatedDir = new File(curatedDirPath);
-        if (!curatedDir.exists()) {
-            curatedDir.mkdirs(); // 创建目录
+        if (!curatedDir.exists() && !curatedDir.mkdirs()) {
+            logger.severe("无法创建 curated 目录: " + curatedDir.getAbsolutePath());
+            return false;
         }
-        curatedFilePath = curatedDirPath + "/chat_" + taskDateStr + ".csv";
+        curatedFilePath = curatedDirPath + "/chat_" + taskDate + ".csv";
+        logger.info("Curated 文件路径: " + curatedFilePath);
     
         // 阶段 1: 拉取数据
         if (!fetchData(sdk)) {
@@ -296,16 +300,12 @@ public class FetchData {
             logger.warning("解密并保存到 curated 文件失败");
         }
     
-        // 生成 userid_mapping_yyyymmdd.csv 文件,保留后续使用
-        //String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
-        //generateUserIdMappingFile(curatedFilePath, mappingFilePath);
-    
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
         if (!mediaDownloadSuccess) {
             logger.severe("媒体文件下载失败率超过阈值");
-            //sendSNSErrorMessage("媒体文件下载失败率超过10%");
         }
+    
         // 阶段 4: 压缩并上传 raw 和 curated 文件到 S3
         if (!compressAndUploadFilesToS3()) {
             return false;
