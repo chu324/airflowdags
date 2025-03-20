@@ -1,67 +1,66 @@
 package com.tencent.wework;
 
-import org.quartz.*;
-import java.util.TimeZone;
-import org.quartz.impl.StdSchedulerFactory;
+import org.quartz.Job;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
 import java.util.logging.Logger;
-import java.util.logging.FileHandler;
-import java.util.logging.SimpleFormatter;
-import java.io.IOException;
-import java.time.ZonedDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 
-public class SchedulerSetup {
-    private static final Logger logger = Logger.getLogger(SchedulerSetup.class.getName());
+public class FetchDataJob implements Job {
+    private static final Logger logger = Logger.getLogger(FetchDataJob.class.getName());
 
-    static {
+    @Override
+    public void execute(JobExecutionContext context) throws JobExecutionException {
+        long sdk = 0;
+        long startTime = System.currentTimeMillis();
+        String taskName = "FetchDataJob";
+        String status = "success";
+        String errorMsg = "";
+        int dataSize = 0;
+
         try {
-            // 配置日志记录
-            String logDir = "logs/"; // 修改为相对路径
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-            ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
-            String dateStr = now.format(formatter);
-            String logPath = logDir + dateStr + "/scheduler.log";
+            // 重置任务日期
+            FetchData.taskDateStr = null;
 
-            // 确保目录存在
-            java.io.File logDirFile = new java.io.File(logDir);
-            if (!logDirFile.exists()) {
-                logDirFile.mkdirs(); // 创建目录
+            // 初始化 SDK
+            sdk = Finance.NewSdk();
+            int initRet = Finance.Init(sdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
+            if (initRet != 0) {
+                logger.severe("SDK 初始化失败, ret: " + initRet);
+                status = "failed";
+                errorMsg = "SDK 初始化失败, ret: " + initRet;
+                return;
             }
 
-            FileHandler fileHandler = new FileHandler(logPath, true);
-            fileHandler.setFormatter(new SimpleFormatter());
-            Logger.getLogger("com.tencent.wework").addHandler(fileHandler);
-        } catch (IOException e) {
-            System.err.println("配置日志记录失败: " + e.getMessage());
+            // 调用拉取数据的逻辑
+            boolean hasMoreData = FetchData.fetchNewData(sdk);
+            if (!hasMoreData) {
+                logger.info("所有数据已拉取完成！");
+            }
+
+            // 假设 dataSize 为拉取的数据量
+            dataSize = 100; // 这里可以根据实际情况设置
+
+        } catch (Exception e) {
+            // 记录错误日志
+            logger.severe("拉取数据失败: " + e.getMessage());
+            status = "failed";
+            errorMsg = e.getMessage();
+            // 发送告警通知
+            sendAlert("拉取数据失败，请检查！");
+        } finally {
+            // 销毁 SDK
+            if (sdk != 0) {
+                Finance.DestroySdk(sdk);
+            }
+
+            // 记录任务状态
+            long taskDuration = System.currentTimeMillis() - startTime;
+            MonitorLog.logTaskStatus(taskName, status, errorMsg, dataSize, taskDuration);
         }
     }
 
-    public static void main(String[] args) throws SchedulerException, InterruptedException {
-
-        // 创建调度器
-        Scheduler scheduler = StdSchedulerFactory.getDefaultScheduler();
-
-        // 定义任务
-        JobDetail job = JobBuilder.newJob(FetchDataJob.class)
-                .withIdentity("fetchDataJob", "group1")
-                .build();     
-
-        // 定义触发器（北京时间2025年1月17日上午11点执行）
-        Trigger trigger = TriggerBuilder.newTrigger()
-                .withIdentity("fetchDataTrigger", "group1") // 0 05 0 * * ? 上午0点5分执行
-                .withSchedule(CronScheduleBuilder.cronSchedule("0 * * * * ?").inTimeZone(TimeZone.getTimeZone("Asia/Shanghai")))
-                .build();
-
-        // 绑定任务和触发器
-        scheduler.scheduleJob(job, trigger);
-
-        // 启动调度器
-        scheduler.start();
-        logger.info("调度器已启动");
-        System.out.println("Current working directory: " + System.getProperty("user.dir"));
-
-        // 让主线程保持运行
-        Thread.sleep(Long.MAX_VALUE);
+    private void sendAlert(String message) {
+        // 实现告警通知逻辑（如发送邮件、短信等）
+        logger.info("发送告警: " + message);
     }
 }
