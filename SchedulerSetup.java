@@ -1,6 +1,7 @@
 package com.tencent.wework;
 
 import org.quartz.*;
+import java.util.TimeZone;
 import org.quartz.impl.StdSchedulerFactory;
 import java.util.logging.Logger;
 import java.util.logging.FileHandler;
@@ -44,12 +45,12 @@ public class SchedulerSetup {
         // 定义任务
         JobDetail job = JobBuilder.newJob(FetchDataJob.class)
                 .withIdentity("fetchDataJob", "group1")
-                .build();
+                .build();     
 
         // 定义触发器（北京时间2025年1月17日上午11点执行）
         Trigger trigger = TriggerBuilder.newTrigger()
-                .withIdentity("fetchDataTrigger", "group1")
-                .withSchedule(CronScheduleBuilder.cronSchedule("0 12 18 * * ?")) // 0 05 0 * * ? 上午0点5分执行
+                .withIdentity("fetchDataTrigger", "group1") // 0 05 0 * * ? 上午0点5分执行
+                .withSchedule(CronScheduleBuilder.cronSchedule("0 * * * * ?").inTimeZone(TimeZone.getTimeZone("Asia/Shanghai")))
                 .build();
 
         // 绑定任务和触发器
