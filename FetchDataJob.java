@@ -16,27 +16,29 @@ public class FetchDataJob implements Job {
         String status = "success";
         String errorMsg = "";
         int dataSize = 0;
-
+        System.out.println("checkpint1");
         try {
             // 重置任务日期
             FetchData.taskDateStr = null;
-
+            System.out.println("checkpint2");
             // 初始化 SDK
             sdk = Finance.NewSdk();
+            System.out.println("checkpint3");
             int initRet = Finance.Init(sdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
+            System.out.println("checkpint4");
             if (initRet != 0) {
                 logger.severe("SDK 初始化失败, ret: " + initRet);
                 status = "failed";
                 errorMsg = "SDK 初始化失败, ret: " + initRet;
                 return;
             }
-
+            System.out.println("checkpint5");
             // 调用拉取数据的逻辑
             boolean hasMoreData = FetchData.fetchNewData(sdk);
             if (!hasMoreData) {
                 logger.info("所有数据已拉取完成！");
             }
-
+            System.out.println("checkpint6");
             // 假设 dataSize 为拉取的数据量
             dataSize = 100; // 这里可以根据实际情况设置
 
