@@ -1,66 +1,40 @@
 package com.tencent.wework;
 
-import org.quartz.Job;
-import org.quartz.JobExecutionContext;
-import org.quartz.JobExecutionException;
-import java.util.logging.Logger;
+import org.quartz.*;
+import org.quartz.impl.StdSchedulerFactory;
+import static org.quartz.CronScheduleBuilder.cronSchedule;
+import static org.quartz.JobBuilder.newJob;
+import static org.quartz.TriggerBuilder.newTrigger;
 
-public class FetchDataJob implements Job {
-    private static final Logger logger = Logger.getLogger(FetchDataJob.class.getName());
+public class SchedulerSetup {
+    private static final Logger logger = Logger.getLogger(SchedulerSetup.class.getName());
 
-    @Override
-    public void execute(JobExecutionContext context) throws JobExecutionException {
-        long sdk = 0;
-        long startTime = System.currentTimeMillis();
-        String taskName = "FetchDataJob";
-        String status = "success";
-        String errorMsg = "";
-        int dataSize = 0;
-
+    public static void main(String[] args) {
         try {
-            // 重置任务日期
-            FetchData.taskDateStr = null;
+            // 1. 创建调度器实例
+            Scheduler scheduler = StdSchedulerFactory.getDefaultScheduler();
 
-            // 初始化 SDK
-            sdk = Finance.NewSdk();
-            int initRet = Finance.Init(sdk, "wx1b5619d5190a04e4", "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs");
-            if (initRet != 0) {
-                logger.severe("SDK 初始化失败, ret: " + initRet);
-                status = "failed";
-                errorMsg = "SDK 初始化失败, ret: " + initRet;
-                return;
-            }
+            // 2. 定义任务（JobDetail）
+            JobDetail job = newJob(FetchDataJob.class)
+                .withIdentity("fetchDataJob", "group1")
+                .build();
 
-            // 调用拉取数据的逻辑
-            boolean hasMoreData = FetchData.fetchNewData(sdk);
-            if (!hasMoreData) {
-                logger.info("所有数据已拉取完成！");
-            }
+            // 3. 定义触发器（Trigger），每分钟执行一次
+            Trigger trigger = newTrigger()
+                .withIdentity("trigger1", "group1")
+                .startNow()
+                .withSchedule(cronSchedule("0 * * * * ?")) // 每分钟执行一次
+                .build();
 
-            // 假设 dataSize 为拉取的数据量
-            dataSize = 100; // 这里可以根据实际情况设置
+            // 4. 将任务和触发器注册到调度器
+            scheduler.scheduleJob(job, trigger);
 
-        } catch (Exception e) {
-            // 记录错误日志
-            logger.severe("拉取数据失败: " + e.getMessage());
-            status = "failed";
-            errorMsg = e.getMessage();
-            // 发送告警通知
-            sendAlert("拉取数据失败，请检查！");
-        } finally {
-            // 销毁 SDK
-            if (sdk != 0) {
-                Finance.DestroySdk(sdk);
-            }
+            // 5. 启动调度器
+            scheduler.start();
+            logger.info("调度器已启动，任务将每分钟执行一次");
 
-            // 记录任务状态
-            long taskDuration = System.currentTimeMillis() - startTime;
-            MonitorLog.logTaskStatus(taskName, status, errorMsg, dataSize, taskDuration);
+        } catch (SchedulerException e) {
+            logger.severe("调度器初始化失败: " + e.getMessage());
         }
-    }
-
-    private void sendAlert(String message) {
-        // 实现告警通知逻辑（如发送邮件、短信等）
-        logger.info("发送告警: " + message);
     }
 }
