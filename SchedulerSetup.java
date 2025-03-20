@@ -6,6 +6,8 @@ import static org.quartz.CronScheduleBuilder.cronSchedule;
 import static org.quartz.JobBuilder.newJob;
 import static org.quartz.TriggerBuilder.newTrigger;
 
+import java.util.logging.Logger;
+
 public class SchedulerSetup {
     private static final Logger logger = Logger.getLogger(SchedulerSetup.class.getName());
 
@@ -33,8 +35,13 @@ public class SchedulerSetup {
             scheduler.start();
             logger.info("调度器已启动，任务将每分钟执行一次");
 
+            // 保持主线程运行
+            Thread.sleep(Long.MAX_VALUE);
+
         } catch (SchedulerException e) {
             logger.severe("调度器初始化失败: " + e.getMessage());
+        } catch (InterruptedException e) {
+            logger.severe("主线程被中断: " + e.getMessage());
         }
     }
 }
