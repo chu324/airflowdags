@@ -261,10 +261,13 @@ public class FetchData {
     }
 
     public static boolean fetchNewData(long sdk) {
+        System.out.println("fetchNewData method called with sdk: " + sdk);
+
         // 设置任务日期
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
         ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai")); // 确保使用北京时间
         taskDateStr = now.format(formatter);
+        System.out.println("Task date string: "+ taskDateStr);
     
         // 初始化 raw 文件路径
         String rawDirPath = "data/raw/" + taskDateStr;
