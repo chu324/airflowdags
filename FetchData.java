@@ -1,3 +1,4 @@
+
 package com.tencent.wework;
 
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
@@ -94,7 +95,7 @@ public class FetchData {
 
     private static int totalTasks;
 
-    private static final String PENDING_TASKS_FILE = "/home/ec2-user/wecom_integration/logs/pending_media_tasks.log";
+    //private static final String PENDING_TASKS_FILE = "/home/tencent/source/wecom_integration/logs/pending_media_tasks.log";
 
     // 定时任务
     private static ScheduledExecutorService scheduler;
@@ -261,33 +262,26 @@ public class FetchData {
     }
 
     public static boolean fetchNewData(long sdk) {
-        // 动态生成日期字符串（局部变量）
+        // 设置任务日期
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
-        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai"));
-        String taskDate = now.format(formatter); // 不再使用静态变量
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Shanghai")); // 确保使用北京时间
+        taskDateStr = now.format(formatter);
     
-        // 使用绝对路径作为基础路径
-        String basePath = "/home/tencent/source/wecom_integration/data/";
-        
         // 初始化 raw 文件路径
-        String rawDirPath = basePath + "raw/" + taskDate;
+        String rawDirPath = "data/raw/" + taskDateStr;
         File rawDir = new File(rawDirPath);
-        if (!rawDir.exists() && !rawDir.mkdirs()) {
-            logger.severe("无法创建 raw 目录: " + rawDir.getAbsolutePath());
-            return false;
+        if (!rawDir.exists()) {
+            rawDir.mkdirs(); // 创建目录
         }
-        rawFilePath = rawDirPath + "/wecom_chat_" + taskDate + ".csv";
-        logger.info("Raw 文件路径: " + rawFilePath);
+        rawFilePath = rawDirPath + "/wecom_chat_" + taskDateStr + ".csv";
     
         // 初始化 curated 文件路径
-        String curatedDirPath = basePath + "curated/" + taskDate;
+        String curatedDirPath = "data/curated/" + taskDateStr;
         File curatedDir = new File(curatedDirPath);
-        if (!curatedDir.exists() && !curatedDir.mkdirs()) {
-            logger.severe("无法创建 curated 目录: " + curatedDir.getAbsolutePath());
-            return false;
+        if (!curatedDir.exists()) {
+            curatedDir.mkdirs(); // 创建目录
         }
-        curatedFilePath = curatedDirPath + "/chat_" + taskDate + ".csv";
-        logger.info("Curated 文件路径: " + curatedFilePath);
+        curatedFilePath = curatedDirPath + "/chat_" + taskDateStr + ".csv";
     
         // 阶段 1: 拉取数据
         if (!fetchData(sdk)) {
@@ -300,12 +294,16 @@ public class FetchData {
             logger.warning("解密并保存到 curated 文件失败");
         }
     
+        // 生成 userid_mapping_yyyymmdd.csv 文件,保留后续使用
+        //String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+        //generateUserIdMappingFile(curatedFilePath, mappingFilePath);
+    
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
         if (!mediaDownloadSuccess) {
             logger.severe("媒体文件下载失败率超过阈值");
+            //sendSNSErrorMessage("媒体文件下载失败率超过10%");
         }
-    
         // 阶段 4: 压缩并上传 raw 和 curated 文件到 S3
         if (!compressAndUploadFilesToS3()) {
             return false;
@@ -1348,8 +1346,8 @@ public class FetchData {
             // logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
     
             // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
-            deleteDirectoryContents("/home/ec2-user/wecom_integration/data/raw"); // 清空 raw 目录下的内容
-            deleteDirectoryContents("/home/ec2-user/wecom_integration/data/curated"); // 清空 curated 目录下的内容
+            deleteDirectoryContents("/home/tencent/source/wecom_integration/data/raw"); // 清空 raw 目录下的内容
+            deleteDirectoryContents("/home/tencent/source/wecom_integration/data/curated"); // 清空 curated 目录下的内容
     
             return true;
         } catch (Exception e) {
