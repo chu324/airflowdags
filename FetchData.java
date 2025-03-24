@@ -1109,7 +1109,11 @@ public class FetchData {
 
     private static File createTempFile(String md5sum, String msgtype) throws IOException {
         String prefix = String.format("%s_%s_", md5sum, msgtype);
-        return Files.createTempFile(prefix, ".tmp").toFile();
+        File tempFile = Files.createTempFile(prefix, ".tmp").toFile();
+        if (tempFile == null) {
+            throw new IOException("创建临时文件失败");
+        }
+        return tempFile;
     }
 
     private static File buildFinalFile(File tempFile, String md5sum, String msgtype, String fileext) {
