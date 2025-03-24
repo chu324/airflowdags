@@ -931,6 +931,10 @@ public class FetchData {
         String msgtype,
         String fileext
     ) throws SdkException {
+        if (sdk <= 0) {
+            logger.severe("无效的 SDK 参数");
+            throw new SdkException(-1, "无效的 SDK 参数");
+        }
         // 重试策略参数配置
         final int MAX_RETRIES = 10;
         final long MAX_RETRY_DURATION = 30 * 60 * 1000; // 30分钟
