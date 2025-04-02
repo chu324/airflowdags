@@ -1,4 +1,3 @@
-
 package com.tencent.wework;
 
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
@@ -157,6 +156,7 @@ public class FetchData {
                     accessToken = rootNode.path("access_token").asText();
                     // 记录 token 的过期时间（当前时间 + expires_in - 60 秒缓冲）
                     tokenExpiresTime = System.currentTimeMillis() + rootNode.path("expires_in").asLong() * 1000 - 60 * 1000;
+                    System.out.println("accessToken值为: " + accessToken);
                     return accessToken;
                 } else {
                     logger.severe("获取 access_token 失败，错误码：" + rootNode.path("errcode").asInt() + "，错误信息：" + rootNode.path("errmsg").asText());
@@ -171,6 +171,10 @@ public class FetchData {
         return null;
     }
 
+    private static int successCount = 0; // 统计成功次数
+    private static int failureCount = 0; // 统计失败次数
+    private static int apiCallCount = 0; // 统计 API 调用次数
+    
     /**
      * 根据 external_userid 获取 unionid
      *
@@ -178,8 +182,8 @@ public class FetchData {
      * @return unionid 字符串
      */
     private static String getUnionIdByExternalUserId(String externalUserId) {
-        String corpid = "wx1b5619d5190a04e4";
-        String corpsecret = "qY6ukRvf83VOi6ZTqVIaKiz93_iDbDGqVLBaSKXJCBs";
+        String corpid = KeyConfigFromCsv.getCorpId();
+        String corpsecret = KeyConfigFromCsv.getUnionidSecret();
     
         String accessToken = getAccessToken(corpid, corpsecret);
         if (accessToken == null) {
@@ -197,22 +201,36 @@ public class FetchData {
     
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
     
-            if (response.statusCode() == 200) { // Check status code instead of isSuccessful
+            apiCallCount++; // 增加 API 调用计数
+    
+            if (response.statusCode() == 200) {
                 JsonNode rootNode = objectMapper.readTree(response.body());
                 if (rootNode.has("errcode") && rootNode.path("errcode").asInt() == 0) {
+                    successCount++; // 成功计数
+                    if (apiCallCount % 1000 == 0) {
+                        logger.info(String.format("API 调用统计: 成功=%d, 失败=%d, 总调用=%d", successCount, failureCount, apiCallCount));
+                    }
                     return rootNode.path("external_contact").path("unionid").asText();
                 } else {
-                    logger.severe("API 调用失败，错误码：" + rootNode.path("errcode").asInt() + "，错误信息：" + rootNode.path("errmsg").asText());
-                    return null;
+                    failureCount++; // 失败计数
+                    logger.warning(String.format("API 调用失败，错误码：%d，错误信息：%s",
+                            rootNode.path("errcode").asInt(), rootNode.path("errmsg").asText()));
                 }
             } else {
+                failureCount++; // 失败计数
                 logger.severe("HTTP 请求失败，状态码：" + response.statusCode());
-                return null;
             }
         } catch (Exception e) {
+            failureCount++; // 失败计数
             logger.severe("获取 unionid 失败：" + e.getMessage());
-            return null;
         }
+    
+        // 每调用 1000 次 API 打印统计信息
+        if (apiCallCount % 1000 == 0) {
+            logger.info(String.format("API 调用统计: 成功=%d, 失败=%d, 总调用=%d", successCount, failureCount, apiCallCount));
+        }
+    
+        return null;
     }
 
     /**
@@ -222,20 +240,38 @@ public class FetchData {
      * @param mappingFilePath   userid_mapping_yyyymmdd.csv 文件路径
      */
     private static void generateUserIdMappingFile(String chatFilePath, String mappingFilePath) {
+        //System.out.println("checkpoint2");
         Set<String> externalUserIds = new HashSet<>();
         int totalMappings = 0;
-    
+        int processedLines = 0; // 记录已处理的行数
+        //System.out.println("checkpoint3");
+        logger.info("开始提取 external_userid...");
+
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath)).build()) {
             csvReader.readNext(); // Skip header
             String[] fields;
+            int lineNumber = 0; // 记录行号
             while ((fields = csvReader.readNext()) != null) {
-                if (fields.length < 5) continue;
+                lineNumber++;
+                logger.fine("读取第 " + lineNumber + " 行: " + Arrays.toString(fields));
+                processedLines++; // 每读取一行，增加计数
+                if (fields.length < 5) {
+                    logger.warning("第 " + lineNumber + " 行字段不足，跳过");
+                    continue;
+                }
     
                 String sender = fields[3];
                 String receiver = fields[4];
+                //System.out.println("sender: "+sender+", receiver: "+receiver);
                 if (isExternalUser(sender)) externalUserIds.add(sender);
                 if (isExternalUser(receiver)) externalUserIds.add(receiver);
+
+                // 每处理 1000 行，打印一次日志
+                if (processedLines % 1000 == 0) {
+                    logger.info(String.format("已处理 %d 行，当前有效 external_userid 数量: %d", processedLines, externalUserIds.size()));
+                }
             }
+            logger.info("提取 external_userid 完成，总计: " + externalUserIds.size() + " 个");
         } catch (Exception e) {
             logger.log(Level.SEVERE, "读取 chat 文件失败", e);
             return;
@@ -243,15 +279,17 @@ public class FetchData {
     
         try (CSVWriter csvWriter = new CSVWriter(new FileWriter(mappingFilePath))) {
             csvWriter.writeNext(new String[]{"external_userid", "unionid"});
+            logger.info("开始处理 external_userid 集合...");
             for (String externalUserId : externalUserIds) {
                 String unionId = getUnionIdByExternalUserId(externalUserId);
                 if (unionId != null) {
                     csvWriter.writeNext(new String[]{externalUserId, unionId});
                     totalMappings++;
+                } else {
+                    logger.warning("未能获取 unionid 的 external_userid: " + externalUserId);
                 }
             }
-            // 新增：生成记录数日志
-            logger.info("生成 userid_mapping 记录数: " + totalMappings);
+            logger.info("处理 external_userid 集合完成，总计成功记录数: " + totalMappings);
         } catch (IOException e) {
             logger.log(Level.SEVERE, "写入 userid_mapping 文件失败", e);
         }
@@ -293,11 +331,11 @@ public class FetchData {
         if (!decryptSuccess) {
             logger.warning("解密并保存到 curated 文件失败");
         }
-    
+        System.out.println("checkpoint1");
         // 生成 userid_mapping_yyyymmdd.csv 文件,保留后续使用
-        //String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
-        //generateUserIdMappingFile(curatedFilePath, mappingFilePath);
-    
+        String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+        generateUserIdMappingFile(curatedFilePath, mappingFilePath);
+        System.out.println("checkpoint10");
         // 阶段 3: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
         if (!mediaDownloadSuccess) {
@@ -533,6 +571,11 @@ public class FetchData {
                         // 验证JSON合法性
                         objectMapper.readTree(rawJsonNode.toString());
                         rawJson = rawJsonNode.toString();
+
+                        if ("chatrecord".equals(msgtype) && rawJson.length() > 60000) {
+                            logger.warning(String.format("raw_json长度超过限制，seq=%s, msgid=%s, 原始长度=%d，已置为空", seqStr, msgid, rawJson.length()));
+                            rawJson = "{}"; // 设置为空JSON
+                        }
                     } catch (Exception e) {
                         logger.warning("无效的JSON内容，替换为默认值");
                         rawJson = "{}"; // 替换空JSON
@@ -786,7 +829,7 @@ public class FetchData {
     }
 
     private static boolean isValidMD5(String md5sum) {
-        return StringUtils.isNotBlank(md5sum) && md5sum.matches("[a-fA-F0-9]{32}");
+        return StringUtils.isNotBlank(md5sum);
     }
 
     private static void executeTaskWithRetry(long sdk, JsonNode taskNode, AtomicInteger successCount, AtomicInteger failureCount) {
@@ -807,21 +850,22 @@ public class FetchData {
                 errorMsg = "Invalid task parameters";
                 throw new IllegalArgumentException(errorMsg);
             }
-    
+ 
             // 下载媒体文件
             File mediaFile = downloadMediaFile(sdk, sdkfileid, md5sum, msgtype, fileext);
             if (mediaFile == null) {
                 errorMsg = "Download failed";
                 throw new IOException(errorMsg);
             }
-    
+ 
             // 上传到 S3
             String s3Key = getMediaS3Key(msgtype, md5sum, fileext);
+            //System.out.println("checkpint1");
             uploadFileToS3(mediaFile.getAbsolutePath(), mediaS3BucketName, s3Key);
-    
+            
             // 清理临时文件
             Files.delete(mediaFile.toPath());
-    
+            
             successCount.incrementAndGet();
         } catch (Exception e) {
             failureCount.incrementAndGet();
@@ -855,7 +899,7 @@ public class FetchData {
     }
 
     private static boolean isValidSDKFileId(String sdkfileid) {
-        return StringUtils.isNotBlank(sdkfileid) && sdkfileid.length() >= 32;
+        return StringUtils.isNotBlank(sdkfileid);
     }
 
 
@@ -936,7 +980,7 @@ public class FetchData {
             throw new SdkException(-1, "无效的 SDK 参数");
         }
         // 重试策略参数配置
-        final int MAX_RETRIES = 10;
+        //final int MAX_RETRIES = 10;
         final long MAX_RETRY_DURATION = 30 * 60 * 1000; // 30分钟
         final long MAX_SLEEP = 30_000; // 30秒
     
@@ -1042,21 +1086,6 @@ public class FetchData {
                         );
                     }
     
-                    // 检查重试次数
-                    if (attempt >= MAX_RETRIES) {
-                        // 记录失败日志
-                        String errorReason = classifyError(e.getStatusCode());
-                        logger.severe(String.format(
-                            "[媒体下载重试失败] 文件:%s 类型:%-6s 错误码:%d 重试次数:%d 累计耗时:%.1fs 错误原因:%s",
-                            md5sum, msgtype, e.getStatusCode(), attempt, elapsed / 1000.0, errorReason
-                        ));
-                        throw new SdkException(e.getStatusCode(), 
-                            "超过最大重试次数(" + MAX_RETRIES + ")" +
-                            " last_error=" + e.getMessage(),
-                            e
-                        );
-                    }
-    
                     // 计算退避时间
                     long baseDelay = (long) Math.pow(2, attempt) * 1000;
                     long jitter = ThreadLocalRandom.current().nextLong(500, 1500);
@@ -1108,7 +1137,7 @@ public class FetchData {
     }
 
     private static boolean isRetryableError(int statusCode) {
-        return statusCode == 10001 || statusCode == 10002 || statusCode == -1000 || statusCode == -1001;
+        return statusCode == 10001 || statusCode == 10002 || statusCode == 10003 || statusCode == -1000 || statusCode == -1001;
     }
 
     private static File createTempFile(String md5sum, String msgtype) throws IOException {
