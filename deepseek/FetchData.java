@@ -291,156 +291,96 @@ public class FetchData {
      * @param mappingFilePath   userid_mapping_yyyymmdd.csv 文件路径
      */
     private static void generateUserIdMappingFile(String chatFilePath, String mappingFilePath) {
-        Set<String> uniqueUserIds = new HashSet<>();
-        ConcurrentLinkedQueue<String> externalUserIds = new ConcurrentLinkedQueue<>();
-        ConcurrentLinkedQueue<String[]> resultQueue = new ConcurrentLinkedQueue<>();
-        ConcurrentLinkedQueue<String> failedUserIds = new ConcurrentLinkedQueue<>();
-        int totalMappings = 0;
-
+        // 1. 使用并发安全的集合存储唯一用户ID
+        Set<String> uniqueUserIds = ConcurrentHashMap.newKeySet();
+        Set<String> externalUserIds = ConcurrentHashMap.newKeySet();
+    
         logger.info("开始提取 sender 和 receiver 列的唯一值...");
-
-        // 读取 chat 文件并提取 sender 和 receiver 列的唯一值
-        long startTime = System.currentTimeMillis();
+    
+        // 2. 批量读取CSV以减少I/O开销
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath)).build()) {
-            csvReader.readNext(); // Skip header
-            String[] fields;
-            int processedCount = 0;
-
-            while ((fields = csvReader.readNext()) != null) {
-                if (fields.length < 5) continue;
-                uniqueUserIds.add(fields[3]); // sender
-                uniqueUserIds.add(fields[4]); // receiver
-                processedCount++;
-
-                // 每 1 分钟输出一次日志
-                if (System.currentTimeMillis() - startTime >= 60_000) {
-                    logger.info("已提取 sender 和 receiver 列的唯一值: " + uniqueUserIds.size() + " 个");
-                    startTime = System.currentTimeMillis(); // 重置计时器
+            csvReader.readNext(); // 跳过表头
+            List<String[]> records = csvReader.readAll(); // 批量读取所有记录
+    
+            // 3. 并行提取唯一用户ID
+            records.parallelStream().forEach(fields -> {
+                if (fields.length >= 5) {
+                    uniqueUserIds.add(fields[3]); // sender
+                    uniqueUserIds.add(fields[4]); // receiver
                 }
-            }
-            logger.info("提取 sender 和 receiver 列的唯一值完成，总计: " + uniqueUserIds.size() + " 个");
+            });
+            logger.info("提取完成，总计唯一用户ID: " + uniqueUserIds.size() + " 个");
         } catch (Exception e) {
             logger.log(Level.SEVERE, "读取 chat 文件失败", e);
             return;
         }
-
-        // 利用多线程并发执行 isExternalUser 函数
-        ExecutorService executor = Executors.newFixedThreadPool(10); // 固定并发度
-        List<Future<?>> futures = new ArrayList<>();
-        for (String userId : uniqueUserIds) {
-            futures.add(executor.submit(() -> {
-                if (isExternalUser(userId)) {
-                    externalUserIds.add(userId);
-                }
-            }));
-        }
-
-        // 等待所有任务完成
-        for (Future<?> future : futures) {
-            try {
-                future.get(10, TimeUnit.MINUTES); // 设置超时时间
-            } catch (TimeoutException e) {
-                logger.severe("线程任务超时");
-            } catch (Exception e) {
-                logger.log(Level.SEVERE, "线程执行失败", e);
-            }
-        }
-
-        executor.shutdown();
+    
+        // 4. 并行判断是否为外部用户
+        ForkJoinPool customPool = new ForkJoinPool(Runtime.getRuntime().availableProcessors() * 2);
         try {
-            if (!executor.awaitTermination(1, TimeUnit.MINUTES)) {
-                logger.warning("线程池未能在指定时间内关闭，强制关闭...");
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            logger.severe("线程池关闭被中断: " + e.getMessage());
-            executor.shutdownNow();
+            customPool.submit(() -> 
+                uniqueUserIds.parallelStream().forEach(userId -> {
+                    if (isExternalUser(userId)) {
+                        externalUserIds.add(userId);
+                    }
+                })
+            ).get();
+        } catch (InterruptedException | ExecutionException e) {
+            logger.severe("并行处理失败: " + e.getMessage());
             Thread.currentThread().interrupt();
         }
-
         logger.info("提取 external_userid 完成，总计: " + externalUserIds.size() + " 个");
-
-        // 将 externalUserIds 转移到线程安全队列
-        ConcurrentLinkedQueue<String> userIdQueue = new ConcurrentLinkedQueue<>(externalUserIds);
-
-        // 创建线程池
-        executor = Executors.newFixedThreadPool(10); // 固定并发度
-
-        // 提交任务
-        futures.clear();
-        for (int i = 0; i < 10; i++) {
-            futures.add(executor.submit(() -> {
-                while (!userIdQueue.isEmpty()) {
-                    String externalUserId = userIdQueue.poll();
-                    if (externalUserId == null) continue;
-
-                    try {
-                        String unionId = getUnionIdByExternalUserId(externalUserId);
-                        if (unionId != null) {
-                            resultQueue.add(new String[]{externalUserId, unionId});
-                        } else {
-                            failedUserIds.add(externalUserId); // 记录失败的 external_userid
-                        }
-                    } catch (Exception e) {
-                        logger.log(Level.SEVERE, "处理 external_userid 失败: " + externalUserId, e);
-                        failedUserIds.add(externalUserId); // 记录失败的 external_userid
-                    }
-                }
-            }));
-        }
-
-        // 等待所有任务完成
-        for (Future<?> future : futures) {
-            try {
-                future.get(10, TimeUnit.MINUTES); // 设置超时时间
-            } catch (TimeoutException e) {
-                logger.severe("线程任务超时");
-            } catch (Exception e) {
-                logger.log(Level.SEVERE, "线程执行失败", e);
-            }
-        }
-
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(1, TimeUnit.MINUTES)) {
-                logger.warning("线程池未能在指定时间内关闭，强制关闭...");
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            logger.severe("线程池关闭被中断: " + e.getMessage());
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-
-        // 重新处理失败的 external_userid
-        if (!failedUserIds.isEmpty()) {
-            logger.info("开始重新处理失败的 external_userid，总计: " + failedUserIds.size() + " 个");
-            for (String externalUserId : failedUserIds) {
-                try {
-                    String unionId = getUnionIdByExternalUserId(externalUserId);
+    
+        // 5. 分批次处理API调用（每批次100个）
+        ExecutorService executor = Executors.newFixedThreadPool(10);
+        Map<String, String> resultMap = new ConcurrentHashMap<>();
+        List<String> userIdList = new ArrayList<>(externalUserIds);
+        int batchSize = 100;
+        AtomicInteger processedCount = new AtomicInteger(0);
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+    
+        for (int i = 0; i < userIdList.size(); i += batchSize) {
+            int from = i;
+            int to = Math.min(i + batchSize, userIdList.size());
+            List<String> batch = userIdList.subList(from, to);
+    
+            futures.add(CompletableFuture.runAsync(() -> {
+                batch.forEach(userId -> {
+                    String unionId = getUnionIdByExternalUserId(userId);
                     if (unionId != null) {
-                        resultQueue.add(new String[]{externalUserId, unionId});
-                    } else {
-                        logger.warning("重新处理仍未获取 unionid 的 external_userid: " + externalUserId);
+                        resultMap.put(userId, unionId);
                     }
-                } catch (Exception e) {
-                    logger.log(Level.SEVERE, "重新处理 external_userid 失败: " + externalUserId, e);
-                }
-            }
+                    // 动态日志输出（每处理10%输出一次）
+                    int current = processedCount.incrementAndGet();
+                    if (current % (externalUserIds.size() / 10) == 0) {
+                        logger.info("处理进度: " + (current * 100 / externalUserIds.size()) + "%");
+                    }
+                });
+            }, executor));
         }
-
-        // 写入 CSV 文件
+    
+        // 6. 等待所有批次完成
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(30, TimeUnit.MINUTES);
+        } catch (TimeoutException e) {
+            logger.severe("任务超时，未在30分钟内完成");
+        } catch (InterruptedException | ExecutionException e) {
+            logger.severe("任务执行异常: " + e.getMessage());
+        } finally {
+            executor.shutdown();
+        }
+    
+        // 7. 写入CSV文件
         try (CSVWriter csvWriter = new CSVWriter(new FileWriter(mappingFilePath))) {
             csvWriter.writeNext(new String[]{"external_userid", "unionid"});
-            while (!resultQueue.isEmpty()) {
-                csvWriter.writeNext(resultQueue.poll());
-                totalMappings++;
-            }
-            logger.info("处理 external_userid 集合完成，总计成功记录数: " + totalMappings);
+            resultMap.forEach((userId, unionId) -> 
+                csvWriter.writeNext(new String[]{userId, unionId})
+            );
+            logger.info("写入完成，总计映射记录: " + resultMap.size());
         } catch (IOException e) {
-            logger.log(Level.SEVERE, "写入 userid_mapping 文件失败", e);
+            logger.log(Level.SEVERE, "写入文件失败", e);
         }
-    }
+}
 
     private static boolean isExternalUser(String userId) {
         return (userId.startsWith("wo") || userId.startsWith("wm")) && !userId.startsWith("wb");
