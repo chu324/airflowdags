@@ -49,6 +49,9 @@ public class FetchDataJob implements Job {
                 Finance.DestroySdk(sdk);
             }
 
+            // 关闭线程池
+            FetchData.shutdownNetworkRetryExecutor();
+
             // 记录任务状态
             long taskDuration = System.currentTimeMillis() - startTime;
             MonitorLog.logTaskStatus(taskName, status, errorMsg, dataSize, taskDuration);
