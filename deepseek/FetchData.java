@@ -301,12 +301,23 @@ public class FetchData {
         try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath)).build()) {
             csvReader.readNext(); // 跳过表头
             List<String[]> records = csvReader.readAll(); // 批量读取所有记录
+
+            // 统计总记录数
+            int totalRecords = records.size();
+            System.out.println("Total records: " + totalRecords);
+            AtomicInteger processedCount = new AtomicInteger(0);
     
             // 3. 并行提取唯一用户ID
             records.parallelStream().forEach(fields -> {
                 if (fields.length >= 5) {
                     uniqueUserIds.add(fields[3]); // sender
                     uniqueUserIds.add(fields[4]); // receiver
+                }
+
+                // 动态日志输出（每处理10%输出一次）
+                int current = processedCount.incrementAndGet();
+                if (current % 1000 == 0) {
+                    logger.info("已处理记录数: " + current + " / " + totalRecords);
                 }
             });
             logger.info("提取完成，总计唯一用户ID: " + uniqueUserIds.size() + " 个");
