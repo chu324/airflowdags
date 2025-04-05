@@ -408,17 +408,17 @@ public class FetchData {
     }
 
     /**
-     * 生成并上传最终的 UnionID 映射文件
+     * 生成最终的 UnionID 映射文件
      * @param unionIdMap 包含新增 external_userid 和对应 unionid 的映射
      */
-    private static void generateAndUploadUnionIdMapping(Map<String, String> unionIdMap) {
+    private static void generatUnionIdMappingCsv(Map<String, String> unionIdMap) {
         if (unionIdMap.isEmpty()) {
             logger.warning("UnionID 映射为空，跳过文件生成");
             return;
         }
     
         // 1. 生成临时 CSV 文件路径（包含日期）
-        String mappingFileName = "unionid" + taskDateStr + ".csv";
+        String mappingFileName = "unionid_" + taskDateStr + ".csv";
         String tmpCsvPath = curatedDirPath + "/" + mappingFileName;
     
         // 3. 写入 CSV 文件
@@ -435,16 +435,6 @@ public class FetchData {
             logger.severe("写入 UnionID 映射文件失败: " + e.getMessage());
             return;
         }
-    
-        // 4. 上传到 S3（路径根据环境动态配置）
-        String env = System.getenv("env");
-        String s3Bucket = "prd".equalsIgnoreCase(env) 
-            ? "175814205108-eds-prd-cn-north-1" 
-            : "175826060701-eds-qa-cn-north-1";
-        String s3Key = String.format("stage/unionid_mappings/%s/%s", taskDateStr, mappingFileName);
-        
-        uploadFileToS3(tmpCsvPath, s3Bucket, s3Key);
-        logger.info("UnionID 映射文件已上传至 S3: s3://" + s3Bucket + "/" + s3Key);
     }
 
     private static boolean isExternalUser(String userId) {
@@ -504,8 +494,8 @@ public class FetchData {
             }
         });
 
-         // 阶段 6: 生成并上传最终的UnionID映射文件
-        generateUserIdMappingFile(curatedFilePath, mappingFilePath);
+         // 阶段 6: 生成UnionID映射文件
+        generatUnionIdMappingCsv(unionIdMap);
         
         // 阶段 7: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
@@ -1544,12 +1534,12 @@ public class FetchData {
             logger.info("curated 文件上传完成: " + curatedS3Key);
     
             // 压缩并上传 userid_mapping 文件
-            String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
-            String mappingZipFilePath = compressFile(mappingFilePath, "userid_mapping_" + taskDateStr + ".zip");
-            String mappingS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/userid_mapping_" + taskDateStr + ".zip";
-            logger.info("开始上传 userid_mapping 文件到 S3: " + mappingS3Key);
+            String mappingFilePath = curatedFilePath.replace("chat_", "unionid_");
+            String mappingZipFilePath = compressFile(mappingFilePath, "unionid_" + taskDateStr + ".zip");
+            String mappingS3Key = "home/wecom/inbound/c360/chat/" + taskDateStr + "/unionid_" + taskDateStr + ".zip";
+            logger.info("开始上传 unionid 文件到 S3: " + mappingS3Key);
             uploadFileToS3(mappingZipFilePath, s3BucketName, mappingS3Key);
-            logger.info("userid_mapping 文件上传完成: " + mappingS3Key);
+            logger.info("unionid_ 文件上传完成: " + mappingS3Key);
     
             // 删除本地 raw 和 curated 目录下的所有子文件夹和文件
             deleteDirectoryContents("/home/tencent/source/wecom_integration/data/raw"); // 清空 raw 目录下的内容
