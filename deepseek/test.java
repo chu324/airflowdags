@@ -254,7 +254,7 @@ public class FetchData {
                     logger.severe("HTTP请求失败，状态码：" + response.statusCode());
                 }
             } catch (IOException | InterruptedException e) {
-                logger.severe("获取unionid失败：" + e.getMessage());
+                //logger.severe("获取unionid失败：" + e.getMessage());
                 if (e instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
                     return null;
@@ -263,7 +263,7 @@ public class FetchData {
     
             attempt++;
             long elapsedTime = System.currentTimeMillis() - startTime;
-            if (elapsedTime > MAX_RETRY_DURATION || attempt >= MAX_RETRIES) {
+            if (elapsedTime > MAX_RETRY_DURATION) {
                 logger.severe(String.format(
                     "重试时间已用尽，external_userid=%s，累计重试次数=%d",
                     externalUserId, attempt
