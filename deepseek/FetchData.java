@@ -171,109 +171,122 @@ public class FetchData {
         return null;
     }
 
-    private static int successCount = 0; // 统计成功次数
-    private static int failureCount = 0; // 统计失败次数
-    private static int apiCallCount = 0; // 统计 API 调用次数
-
-    /**
-     * 根据 external_userid 获取 unionid
-     *
-     * @param externalUserId 外部联系人 ID
-     * @return unionid 字符串
-     */
-    // 添加新的计数器
-    private static int successfulUnionIdCount = 0; // 成功返回 unionid 的 external_userid 数量
-    private static int noUnionIdCount = 0;        // 没有对应 unionid 的 external_userid 数量
-
+    private static final AtomicInteger apiCallCount = new AtomicInteger(0);
+    private static final AtomicInteger successfulUnionIdCount = new AtomicInteger(0);
+    private static final AtomicInteger noUnionIdCount = new AtomicInteger(0);
+    
     private static String getUnionIdByExternalUserId(String externalUserId) {
         String corpid = KeyConfigFromCsv.getCorpId();
         String corpsecret = KeyConfigFromCsv.getUnionidSecret();
-
+    
+        // 1. 获取有效的 access_token
         String accessToken = getAccessToken(corpid, corpsecret);
-        if (accessToken == null) {
-            logger.severe("获取 access_token 失败");
+        if (accessToken == null || accessToken.isEmpty()) {
+            logger.severe("获取 access_token 失败，无法调用 API");
             return null;
         }
-
-        String apiUrl = "https://qyapi.weixin.qq.com/cgi-bin/externalcontact/get?access_token=" + accessToken + "&external_userid=" + externalUserId;
-
+    
+        // 2. 构建 API URL（使用更安全的参数编码）
+        String apiUrl = String.format(
+            "https://qyapi.weixin.qq.com/cgi-bin/externalcontact/get?access_token=%s&external_userid=%s",
+            URLEncoder.encode(accessToken, StandardCharsets.UTF_8),
+            URLEncoder.encode(externalUserId, StandardCharsets.UTF_8)
+        );
+    
         final long MAX_RETRY_DURATION = 30 * 60 * 1000; // 最大重试时间30分钟
+        final int MAX_ATTEMPTS = 10; // 最大重试次数
         long startTime = System.currentTimeMillis();
         int attempt = 0;
-
+    
         while (true) {
             try {
-                HttpClient client = HttpClient.newHttpClient();
+                // 3. 发送 HTTP 请求（显式配置超时）
+                HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(15))
+                    .build();
+    
                 HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(apiUrl))
-                        .build();
-
+                    .uri(URI.create(apiUrl))
+                    .timeout(Duration.ofSeconds(20))
+                    .build();
+    
                 HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-                apiCallCount++; // 增加 API 调用计数
-
+    
+                // 4. 原子操作更新调用计数
+                int currentApiCall = apiCallCount.incrementAndGet();
+    
+                // 5. 每调用1000次打印统计信息
+                if (currentApiCall % 1000 == 0) {
+                    logger.info(String.format(
+                        "API 调用统计: 成功返回 unionid=%d, 无对应 unionid=%d",
+                        successfulUnionIdCount.get(),
+                        noUnionIdCount.get()
+                    ));
+                }
+    
+                // 6. 处理 HTTP 响应
                 if (response.statusCode() == 200) {
                     JsonNode rootNode = objectMapper.readTree(response.body());
-                    if (rootNode.has("errcode") && rootNode.path("errcode").asInt() == 0) {
-                        successfulUnionIdCount++; // 成功返回 unionid 的计数
-                        if (apiCallCount % 1000 == 0) {
-                            logger.info(String.format(
-                                "API 调用统计: 成功返回 unionid=%d, 无对应 unionid=%d",
-                                successfulUnionIdCount, noUnionIdCount
-                            ));
+                    int errCode = rootNode.path("errcode").asInt(-1);
+                    String errMsg = rootNode.path("errmsg").asText("未知错误");
+    
+                    if (errCode == 0) {
+                        // 7. 明确检查字段存在性
+                        if (rootNode.has("external_contact") && 
+                            rootNode.get("external_contact").has("unionid")) {
+                            String unionid = rootNode.get("external_contact").get("unionid").asText();
+                            successfulUnionIdCount.incrementAndGet();
+                            return unionid;
+                        } else {
+                            logger.warning("响应中缺少 unionid 字段: " + rootNode);
+                            return null;
                         }
-                        return rootNode.path("external_contact").path("unionid").asText();
+                    } else if (errCode == 84061) {
+                        // 8. 特殊错误码处理（无对应 unionid）
+                        noUnionIdCount.incrementAndGet();
+                        logger.warning(String.format(
+                            "external_userid=%s 无对应 unionid，错误码：%d，错误信息：%s",
+                            externalUserId, errCode, errMsg
+                        ));
+                        return null;
                     } else {
-                        int errCode = rootNode.path("errcode").asInt();
-                        String errMsg = rootNode.path("errmsg").asText();
-
-                        // 特殊处理错误码 84061
-                        if (errCode == 84061) {
-                            noUnionIdCount++; // 无对应 unionid 的计数
-                            //logger.warning(String.format("external_userid: %s 无对应 unionid，错误码：%d，错误信息：%s", externalUserId, errCode, errMsg));
-                            if (apiCallCount % 1000 == 0) {
-                                logger.info(String.format(
-                                    "API 调用统计: 成功返回 unionid=%d, 无对应 unionid=%d",
-                                    successfulUnionIdCount, noUnionIdCount
-                                ));
-                            }
-                            return null; // 跳过重试
-                        }
-
-                        logger.warning(String.format("API 调用失败，错误码：%d，错误信息：%s", errCode, errMsg));
+                        logger.warning(String.format(
+                            "API 调用失败，错误码：%d，错误信息：%s",
+                            errCode, errMsg
+                        ));
                     }
                 } else {
                     logger.severe("HTTP 请求失败，状态码：" + response.statusCode());
                 }
             } catch (IOException | InterruptedException e) {
                 logger.severe("获取 unionid 失败：" + e.getMessage());
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt(); // 恢复中断状态
+                    return null;
+                }
             }
-
-            // 每调用 1000 次 API 打印统计信息
-            if (apiCallCount % 1000 == 0) {
-                logger.info(String.format(
-                    "API 调用统计: 成功返回 unionid=%d, 无对应 unionid=%d",
-                    successfulUnionIdCount, noUnionIdCount
-                ));
-            }
-
-            // 重试机制
+    
+            // 9. 重试逻辑（指数退避 + 随机抖动）
             attempt++;
             long elapsedTime = System.currentTimeMillis() - startTime;
-
-            if (elapsedTime > MAX_RETRY_DURATION) {
-                logger.severe("重试时间已用尽，external_userid: " + externalUserId);
+            if (elapsedTime > MAX_RETRY_DURATION || attempt >= MAX_ATTEMPTS) {
+                logger.severe(String.format(
+                    "重试时间已用尽，external_userid=%s，累计重试次数=%d",
+                    externalUserId, attempt
+                ));
                 return null;
             }
-
-            // 指数退避 + 随机抖动
+    
+            // 10. 计算退避时间（限制最大30秒）
             long baseDelay = (long) Math.pow(2, attempt) * 1000;
             long jitter = ThreadLocalRandom.current().nextLong(500, 1500);
-            long sleepTime = Math.min(baseDelay + jitter, 30_000); // 最大延迟30秒
-
-            logger.warning(String.format("调用 API 失败，external_userid: %s，第 %d 次重试，休眠 %.1f 秒",
-                    externalUserId, attempt, sleepTime / 1000.0));
-
+            long sleepTime = Math.min(baseDelay + jitter, 30_000);
+    
+            logger.warning(String.format(
+                "调用 API 失败，external_userid=%s，第 %d 次重试，休眠 %.1f 秒",
+                externalUserId, attempt, sleepTime / 1000.0
+            ));
+    
             try {
                 Thread.sleep(sleepTime);
             } catch (InterruptedException ie) {
@@ -286,38 +299,36 @@ public class FetchData {
 
     private static void generateAndUploadExternalUserIds(String chatFilePath, String curatedDirPath) {
         Set<String> externalUserIds = ConcurrentHashMap.newKeySet();
+        String tmpCsvPath = curatedDirPath + "/wecom_external_userid.csv";
         
-        // 1. 读取chat文件提取sender和receiver
-        try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath))) {
-            csvReader.readNext(); // 跳过表头
-            String[] record;
-            while ((record = csvReader.readNext()) != null) {
-                if (record.length >= 5) {
-                    String sender = record[3];
-                    String receiver = record[4];
-                    if (isExternalUser(sender)) externalUserIds.add(sender);
-                    if (isExternalUser(receiver)) externalUserIds.add(receiver);
+        // 确保文件写入完成后再上传
+        try (CSVWriter csvWriter = new CSVWriter(new FileWriter(tmpCsvPath))) {
+            // 1. 读取chat文件提取sender和receiver
+            try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath))) {
+                csvReader.readNext(); // 跳过表头
+                String[] record;
+                while ((record = csvReader.readNext()) != null) {
+                    if (record.length >= 5) {
+                        String sender = record[3];
+                        String receiver = record[4];
+                        if (isExternalUser(sender)) externalUserIds.add(sender);
+                        if (isExternalUser(receiver)) externalUserIds.add(receiver);
+                    }
                 }
             }
-        } catch (Exception e) {
-            logger.severe("读取chat文件失败: " + e.getMessage());
-            return;
-        }
     
-        // 2. 生成带行数统计的日志
-        int totalExternalIds = externalUserIds.size();
-        logger.info("提取到外部用户ID数量: " + totalExternalIds);
-    
-        // 3. 写入临时CSV文件到curated目录
-        String tmpCsvPath = curatedDirPath + "/wecom_external_userid.csv";
-        try (CSVWriter csvWriter = new CSVWriter(new FileWriter(tmpCsvPath))) {
+            // 2. 写入CSV文件
             csvWriter.writeNext(new String[]{"external_userid"});
             externalUserIds.forEach(id -> csvWriter.writeNext(new String[]{id}));
     
-        // 4. 上传到S3
-        String s3Key = "stage/tmp/wecom_external_userid.csv";
-        uploadFileToS3(tmpCsvPath, mediaS3BucketName, s3Key);
-        logger.info("外部用户ID列表已上传至S3: " + s3Key);
+            // 3. 上传到S3（必须在try块内部）
+            String s3Key = "stage/tmp/wecom_external_userid.csv";
+            uploadFileToS3(tmpCsvPath, mediaS3BucketName, s3Key);
+            logger.info("外部用户ID列表已上传至S3: " + s3Key);
+    
+        } catch (Exception e) {
+            logger.severe("处理外部用户ID失败: " + e.getMessage());
+        }
     }
 
     // 新增方法：获取Redshift连接信息
@@ -489,8 +500,10 @@ public class FetchData {
         Map<String, String> unionIdMap = new ConcurrentHashMap<>();
         externalUserIdsToProcess.parallelStream().forEach(userId -> {
             String unionId = getUnionIdByExternalUserId(userId);
-            if (unionId != null) {
+            if (unionId != null && !unionId.isEmpty()) { // 明确检查空值和空字符串
                 unionIdMap.put(userId, unionId);
+            } else {
+            logger.warning("未获取到 unionid 的 external_userid: " + userId);
             }
         });
 
