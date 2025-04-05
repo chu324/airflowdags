@@ -284,114 +284,168 @@ public class FetchData {
         }
     }
 
-    /**
-     * 生成 userid_mapping_yyyymmdd.csv 文件
-     *
-     * @param chatFilePath      chat_yyyymmdd.csv 文件路径
-     * @param mappingFilePath   userid_mapping_yyyymmdd.csv 文件路径
-     */
-    private static void generateUserIdMappingFile(String chatFilePath, String mappingFilePath) {
-        // 1. 使用并发安全的集合存储唯一用户ID
-        Set<String> uniqueUserIds = ConcurrentHashMap.newKeySet();
+    private static void generateAndUploadExternalUserIds(String chatFilePath, String curatedDirPath) {
         Set<String> externalUserIds = ConcurrentHashMap.newKeySet();
-    
-        logger.info("开始提取 sender 和 receiver 列的唯一值...");
-    
-        // 2. 批量读取CSV以减少I/O开销
-        try (CSVReader csvReader = new CSVReaderBuilder(new FileReader(chatFilePath)).build()) {
+        
+        // 1. 读取chat文件提取sender和receiver
+        try (CSVReader csvReader = new CSVReader(new FileReader(chatFilePath))) {
             csvReader.readNext(); // 跳过表头
-            List<String[]> records = csvReader.readAll(); // 批量读取所有记录
-
-            // 统计总记录数
-            int totalRecords = records.size();
-            System.out.println("Total records: " + totalRecords);
-            AtomicInteger processedCount = new AtomicInteger(0);
-    
-            // 3. 并行提取唯一用户ID
-            records.parallelStream().forEach(fields -> {
-                if (fields.length >= 5) {
-                    uniqueUserIds.add(fields[3]); // sender
-                    uniqueUserIds.add(fields[4]); // receiver
+            String[] record;
+            while ((record = csvReader.readNext()) != null) {
+                if (record.length >= 5) {
+                    String sender = record[3];
+                    String receiver = record[4];
+                    if (isExternalUser(sender)) externalUserIds.add(sender);
+                    if (isExternalUser(receiver)) externalUserIds.add(receiver);
                 }
-
-                // 动态日志输出（每处理10%输出一次）
-                int current = processedCount.incrementAndGet();
-                if (current % 1000 == 0) {
-                    logger.info("已处理记录数: " + current + " / " + totalRecords);
-                }
-            });
-            logger.info("提取完成，总计唯一用户ID: " + uniqueUserIds.size() + " 个");
+            }
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "读取 chat 文件失败", e);
+            logger.severe("读取chat文件失败: " + e.getMessage());
             return;
         }
     
-        // 4. 并行判断是否为外部用户
-        ForkJoinPool customPool = new ForkJoinPool(Runtime.getRuntime().availableProcessors() * 2);
-        try {
-            customPool.submit(() -> 
-                uniqueUserIds.parallelStream().forEach(userId -> {
-                    if (isExternalUser(userId)) {
-                        externalUserIds.add(userId);
-                    }
-                })
-            ).get();
-        } catch (InterruptedException | ExecutionException e) {
-            logger.severe("并行处理失败: " + e.getMessage());
-            Thread.currentThread().interrupt();
+        // 2. 生成带行数统计的日志
+        int totalExternalIds = externalUserIds.size();
+        logger.info("提取到外部用户ID数量: " + totalExternalIds);
+    
+        // 3. 写入临时CSV文件到curated目录
+        String tmpCsvPath = curatedDirPath + "/wecom_external_userid.csv";
+        try (CSVWriter csvWriter = new CSVWriter(new FileWriter(tmpCsvPath))) {
+            csvWriter.writeNext(new String[]{"external_userid"});
+            externalUserIds.forEach(id -> csvWriter.writeNext(new String[]{id}));
+    
+        // 4. 上传到S3
+        String s3Key = "stage/tmp/wecom_external_userid.csv";
+        uploadFileToS3(tmpCsvPath, mediaS3BucketName, s3Key);
+        logger.info("外部用户ID列表已上传至S3: " + s3Key);
+    }
+
+    // 新增方法：获取Redshift连接信息
+    private static Map<String, String> loadRedshiftSecret() {
+        String secretName = "prd".equalsIgnoreCase(System.getenv("env")) 
+            ? "prd/datafabric_service/redshift" 
+            : "qa/datafabric_service/redshift";
+        
+        try (SecretsManagerClient client = SecretsManagerClient.create()) {
+            GetSecretValueResponse response = client.getSecretValue(
+                GetSecretValueRequest.builder().secretId(secretName).build()
+            );
+            JsonNode secretJson = objectMapper.readTree(response.secretString());
+            
+            Map<String, String> credentials = new HashMap<>();
+            credentials.put("username", secretJson.path("username").asText());
+            credentials.put("password", secretJson.path("password").asText());
+            credentials.put("host", secretJson.path("host").asText());
+            credentials.put("port", secretJson.path("port").asText());
+            return credentials;
+        } catch (Exception e) {
+            logger.severe("获取Redshift凭据失败: " + e.getMessage());
+            throw new RuntimeException(e);
         }
-        logger.info("提取 external_userid 完成，总计: " + externalUserIds.size() + " 个");
+    }
     
-        // 5. 分批次处理API调用（每批次100个）
-        ExecutorService executor = Executors.newFixedThreadPool(10);
-        Map<String, String> resultMap = new ConcurrentHashMap<>();
-        List<String> userIdList = new ArrayList<>(externalUserIds);
-        int batchSize = 100;
-        AtomicInteger processedCount = new AtomicInteger(0);
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+    // 构造Redshift JDBC URL
+    private static String getRedshiftJdbcUrl() {
+        Map<String, String> creds = loadRedshiftSecret();
+        String dbName = "prd".equalsIgnoreCase(System.getenv("env")) ? "prd_c360" : "qa_c360";
+        return String.format("jdbc:redshift://%s:%s/%s?user=%s&password=%s",
+            creds.get("host"), creds.get("port"), dbName,
+            creds.get("username"), creds.get("password"));
+    }
+
+    // 新增方法：执行COPY命令
+    private static void executeCopyCommand() {
+        String env = System.getenv("env");
+        String iamRole = "prd".equalsIgnoreCase(env) 
+            ? "arn:aws-cn:iam::175814205108:role/datalab-cn-redshift-prd-cn-north-1-role"
+            : "arn:aws-cn:iam::175826060701:role/datalab-cn-redshift-qa-cn-north-1-role";
+        
+        String s3Path = String.format("s3://%s/stage/tmp/wecom_external_userid.csv", 
+            "prd".equalsIgnoreCase(env) ? "175814205108-eds-prd-cn-north-1" : "175826060701-eds-qa-cn-north-1");
     
-        for (int i = 0; i < userIdList.size(); i += batchSize) {
-            int from = i;
-            int to = Math.min(i + batchSize, userIdList.size());
-            List<String> batch = userIdList.subList(from, to);
+        String copySql = String.format(
+            "TRUNCATE TABLE stage.wecom_external_userid; " +
+            "COPY stage.wecom_external_userid " +
+            "FROM '%s' " +
+            "IAM_ROLE '%s' " +
+            "DELIMITER ',' " +
+            "FORMAT CSV " +
+            "ENCODING UTF8 " +
+            "IGNOREHEADER 1;", 
+            s3Path, iamRole
+        );
     
-            futures.add(CompletableFuture.runAsync(() -> {
-                batch.forEach(userId -> {
-                    String unionId = getUnionIdByExternalUserId(userId);
-                    if (unionId != null) {
-                        resultMap.put(userId, unionId);
-                    }
-                    // 动态日志输出（每处理10%输出一次）
-                    int current = processedCount.incrementAndGet();
-                    if (current % (externalUserIds.size() / 10) == 0) {
-                        logger.info("处理进度: " + (current * 100 / externalUserIds.size()) + "%");
-                    }
-                });
-            }, executor));
+        try (Connection conn = DriverManager.getConnection(getRedshiftJdbcUrl());
+             Statement stmt = conn.createStatement()) {
+            stmt.execute(copySql);
+            logger.info("COPY命令执行成功");
+        } catch (SQLException e) {
+            logger.severe("COPY命令执行失败: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 新增方法：获取需处理的external_userid列表
+    private static List<String> getNewExternalUserIds() {
+        String sql = "SELECT s.external_userid " +
+                     "FROM stage.wecom_external_userid s " +
+                     "LEFT JOIN landing.wecom_unionid l " +
+                     "ON s.external_userid = l.external_userid " +
+                     "WHERE l.external_userid IS NULL;";
+    
+        List<String> newUserIds = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(getRedshiftJdbcUrl());
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                newUserIds.add(rs.getString("external_userid"));
+            }
+        } catch (SQLException e) {
+            logger.severe("查询新增用户失败: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+        return newUserIds;
+    }
+
+    /**
+     * 生成并上传最终的 UnionID 映射文件
+     * @param unionIdMap 包含新增 external_userid 和对应 unionid 的映射
+     */
+    private static void generateAndUploadUnionIdMapping(Map<String, String> unionIdMap) {
+        if (unionIdMap.isEmpty()) {
+            logger.warning("UnionID 映射为空，跳过文件生成");
+            return;
         }
     
-        // 6. 等待所有批次完成
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(30, TimeUnit.MINUTES);
-        } catch (TimeoutException e) {
-            logger.severe("任务超时，未在30分钟内完成");
-        } catch (InterruptedException | ExecutionException e) {
-            logger.severe("任务执行异常: " + e.getMessage());
-        } finally {
-            executor.shutdown();
-        }
+        // 1. 生成临时 CSV 文件路径（包含日期）
+        String mappingFileName = "unionid" + taskDateStr + ".csv";
+        String tmpCsvPath = curatedDirPath + "/" + mappingFileName;
     
-        // 7. 写入CSV文件
-        try (CSVWriter csvWriter = new CSVWriter(new FileWriter(mappingFilePath))) {
+        // 3. 写入 CSV 文件
+        try (CSVWriter csvWriter = new CSVWriter(new FileWriter(tmpCsvPath))) {
             csvWriter.writeNext(new String[]{"external_userid", "unionid"});
-            resultMap.forEach((userId, unionId) -> 
+            unionIdMap.forEach((userId, unionId) -> 
                 csvWriter.writeNext(new String[]{userId, unionId})
             );
-            logger.info("写入完成，总计映射记录: " + resultMap.size());
+            
+            // 记录生成信息
+            int rowCount = unionIdMap.size();
+            logger.info("获取unionid总数: " + rowCount);
         } catch (IOException e) {
-            logger.log(Level.SEVERE, "写入文件失败", e);
+            logger.severe("写入 UnionID 映射文件失败: " + e.getMessage());
+            return;
         }
-}
+    
+        // 4. 上传到 S3（路径根据环境动态配置）
+        String env = System.getenv("env");
+        String s3Bucket = "prd".equalsIgnoreCase(env) 
+            ? "175814205108-eds-prd-cn-north-1" 
+            : "175826060701-eds-qa-cn-north-1";
+        String s3Key = String.format("stage/unionid_mappings/%s/%s", taskDateStr, mappingFileName);
+        
+        uploadFileToS3(tmpCsvPath, s3Bucket, s3Key);
+        logger.info("UnionID 映射文件已上传至 S3: s3://" + s3Bucket + "/" + s3Key);
+    }
 
     private static boolean isExternalUser(String userId) {
         return (userId.startsWith("wo") || userId.startsWith("wm")) && !userId.startsWith("wb");
@@ -429,18 +483,37 @@ public class FetchData {
         if (!decryptSuccess) {
             logger.warning("解密并保存到 curated 文件失败");
         }
-        System.out.println("checkpoint1");
-        // 生成 userid_mapping_yyyymmdd.csv 文件,保留后续使用
-        String mappingFilePath = curatedFilePath.replace("chat_", "userid_mapping_");
+
+        // 阶段 3: 提取并上传外部用户ID到S3
+        generateAndUploadExternalUserIds(curatedFilePath);
+
+        // 阶段 4: 导入Redshift并过滤新增ID
+        executeCopyCommand();
+        List<String> externalUserIdsToProcess = getNewExternalUserIds();
+        if (externalUserIdsToProcess.isEmpty()) {
+            logger.info("无新增external_userid，跳过API调用");
+            return true;
+        }
+
+        // 阶段 5: 仅处理新增的external_userid
+        Map<String, String> unionIdMap = new ConcurrentHashMap<>();
+        externalUserIdsToProcess.parallelStream().forEach(userId -> {
+            String unionId = getUnionIdByExternalUserId(userId);
+            if (unionId != null) {
+                unionIdMap.put(userId, unionId);
+            }
+        });
+
+         // 阶段 6: 生成并上传最终的UnionID映射文件
         generateUserIdMappingFile(curatedFilePath, mappingFilePath);
-        System.out.println("checkpoint10");
-        // 阶段 3: 下载媒体文件到 S3
+        
+        // 阶段 7: 下载媒体文件到 S3
         boolean mediaDownloadSuccess = downloadMediaFilesToS3(sdk);
         if (!mediaDownloadSuccess) {
             logger.severe("媒体文件下载失败率超过阈值");
             //sendSNSErrorMessage("媒体文件下载失败率超过10%");
         }
-        // 阶段 4: 压缩并上传 raw 和 curated 文件到 S3
+        // 阶段 8: 压缩并上传 raw 和 curated 文件到 S3
         if (!compressAndUploadFilesToS3()) {
             return false;
         }
