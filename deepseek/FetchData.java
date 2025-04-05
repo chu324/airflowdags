@@ -403,6 +403,15 @@ public class FetchData {
         } catch (SQLException e) {
             logger.severe("COPY命令执行失败: " + e.getMessage());
             throw new RuntimeException(e);
+        } finally {
+            // 显式关闭连接（双重保障）
+            if (conn != null) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    logger.warning("关闭数据库连接失败: " + e.getMessage());
+                }
+            }
         }
     }
 
