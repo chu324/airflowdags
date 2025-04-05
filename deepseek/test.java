@@ -234,15 +234,15 @@ public class FetchData {
                             successfulUnionIdCount.incrementAndGet();
                             return unionid;
                         } else {
-                            logger.warning("响应中缺少unionid字段: " + rootNode);
+                            //logger.warning("响应中缺少unionid字段: " + rootNode);
                             return null;
                         }
                     } else if (errCode == 84061) {
                         noUnionIdCount.incrementAndGet();
-                        logger.warning(String.format(
-                            "external_userid=%s无对应unionid，错误码：%d，错误信息：%s",
-                            externalUserId, errCode, errMsg
-                        ));
+                        //logger.warning(String.format(
+                        //    "external_userid=%s无对应unionid，错误码：%d，错误信息：%s",
+                        //    externalUserId, errCode, errMsg
+                        //));
                         return null;
                     } else {
                         logger.warning(String.format(
@@ -418,16 +418,34 @@ public class FetchData {
                      "WHERE l.external_userid IS NULL;";
     
         List<String> newUserIds = new ArrayList<>();
+        int redshiftCount = 0;
         try (Connection conn = DriverManager.getConnection(getRedshiftJdbcUrl());
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) {
                 newUserIds.add(rs.getString("external_userid"));
+                redshiftCount++;
             }
         } catch (SQLException e) {
             logger.severe("查询新增用户失败: " + e.getMessage());
             throw new RuntimeException(e);
         }
+
+        // 获取上传的源文件的行数
+        String sourceFilePath = "data/curated/" + taskDateStr + "/wecom_external_userid.csv";
+        long sourceFileCount = 0;
+        try (BufferedReader reader = new BufferedReader(new FileReader(sourceFilePath))) {
+            sourceFileCount = reader.lines().skip(1).count(); // 跳过表头
+        } catch (IOException e) {
+            logger.severe("读取源文件失败: " + e.getMessage());
+        }
+
+        // 打印日志对比 Redshift 返回的数量和源文件的数量
+        logger.info(String.format(
+            "Redshift返回的external_userid数量: %d, 上传的源文件external_userid数量: %d",
+            redshiftCount, sourceFileCount
+        ));
+
         return newUserIds;
     }
 
@@ -516,7 +534,7 @@ public class FetchData {
             if (StringUtils.isNotBlank(unionId)) {
                 unionIdMap.put(userId, unionId);
             } else {
-                logger.warning("未获取到unionid的external_userid: " + userId);
+                //logger.warning("未获取到unionid的external_userid: " + userId);
             }
         });
 
@@ -1168,7 +1186,7 @@ public class FetchData {
         String md5sum, 
         String msgtype,
         String fileext
-    ) throws SdkException {
+    ) throws IOException, SdkException {
         if (sdk <= 0) {
             logger.severe("无效的SDK参数");
             throw new SdkException(-1, "无效的SDK参数");
@@ -1691,6 +1709,14 @@ public class FetchData {
         long maxDelay = 10000;
         long delay = (long) (baseDelay * Math.pow(2, attempt));
         return Math.min(delay, maxDelay) + new Random().nextInt(1000);
+    }
+
+    private static boolean isValidMD5(String md5sum) {
+        return StringUtils.isNotBlank(md5sum);
+    }
+
+    private static boolean isValidMsgType(String msgtype) {
+        return Set.of("image", "voice", "video", "emotion", "file").contains(msgtype);
     }
 
     /**
