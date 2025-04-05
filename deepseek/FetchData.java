@@ -1678,4 +1678,19 @@ public class FetchData {
         long delay = (long) (baseDelay * Math.pow(2, attempt));
         return Math.min(delay, maxDelay) + new Random().nextInt(1000); // 添加随机抖动
     }
+
+    // 在 FetchData 类中添加以下方法
+    public static void shutdownNetworkRetryExecutor() {
+        if (networkRetryExecutor != null && !networkRetryExecutor.isShutdown()) {
+            networkRetryExecutor.shutdown();
+            try {
+                if (!networkRetryExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    networkRetryExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                networkRetryExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
 }
