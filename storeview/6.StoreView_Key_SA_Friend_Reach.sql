@@ -1,471 +1,644 @@
--- 6. StoreView_Key_SA_Friend_Reach
-drop table  IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach;
-create table prd_crm.stage.StoreView_Key_SA_Friend_Reach as(
-with fy_firstday as (
-select date(calendar_date) as start_timewindow
-from cdlcrm.cdl_mstr_calendar
-where fisc_year_num = (select fisc_year_num
-from cdlcrm.cdl_mstr_calendar
-where date(calendar_date) = date((GETDATE() + INTERVAL '8 hours')))
-and fisc_year_day_num=1)
-,chat_time_period as (
-        select *
-        from prd_crm.cdlcrm.cdl_customer_sa_wecom_chat
-        where split_part(msgtime,' ',2) between '10:00:00' and '22:00:00'
-        and  brand_code in ('Coach')
-        and date(cast(msgtime as timestamp)) between (select start_timewindow from fy_firstday) and date((GETDATE() + INTERVAL '8 hours'))
-    ),
- sa_table as (
-    select DISTINCT user_id,name,local_name,store_nbr,counter_type_code,region,region_datail
-    from prd_crm.dlabs.store_view_sa_customer
-    --Status: 0-created;1- actived; 2 Banned; 4 - Not actived; 5 Exit
-    where sa_status in ('0','1','4')
-      and local_name not in ('TW EDA (Temp Store)_OCF23')
-),
-     max_year as (select min(add_date) as fy_start_date,
-                         max(cast(20 || substring(fisc_year, 3, 2) as int)) as year
-                  from prd_crm.dlabs.store_view_sa_customer
-                  where cast(20 || substring(fisc_year, 3, 2) as int) in (
-                      (select cast(20 || substring(max(fisc_year), 3, 2) as int) as year_max
-                       from prd_crm.dlabs.store_view_sa_customer))),
-     -- 1. calculate the sa sales with adding info list, successful sale, consumotion amount
-     add_total as (
-         select add_date,user_id,card_type_new,count(distinct work_external_user_id) as people
-         from (
-                  select
-                      work_external_user_id,user_id,name,add_date,card_type_new
-                  from prd_crm.dlabs.store_view_sa_customer where user_id is not null and add_rank =1
-                                                              and is_key_sa in ('1')
-                                                              and add_date>'1970-01-01'
-                  group by  1,2,3,4,5)
-         group by 1,2,3
-     ),
-     successful_sales_amount as (
-         select
-             txn_date,user_id_txn,card_type_new,
-             sum(demand) as successful_sales_amount
-         from (
-                  select
-                      work_external_user_id,customer_id,card_type_new,txn_nbr,txn_date,user_id_txn,demand
-                  from prd_crm.dlabs.store_view_sa_customer
-                  where user_id_txn is not null
-                    and is_key_sa in ('1')
-                  group by  1,2,3,4,5,6,7) group by 1,2,3
-     ),
-     consumption_amount as (
-         select
-             txn_date,user_id,card_type_new,
-             sum(demand) as consumption_amount
-         from (
-                  select
-                      work_external_user_id,user_id,name,txn_date,txn_nbr,card_type_new,demand
-                  from prd_crm.dlabs.store_view_sa_customer where user_id is not null
-                                                              and is_key_sa in ('1')
-                  group by  1,2,3,4,5,6,7) group by 1,2,3
-     ),
-     amout_summary_sep as (
-         select * from (
-                           select
-                               coalesce(t1.txn_date,t2.txn_date) as txn_date,
-                               coalesce(t1.user_id_txn,t2.user_id) as user_id,
-                               coalesce(t1.card_type_new,t2.card_type_new) as card_type_new,
-                               t1.successful_sales_amount as successful_sales_amount,
-                               t2.consumption_amount as consumption_amount
-                           from successful_sales_amount t1
-                                    full outer join  consumption_amount t2
-                                                     on t1.txn_date = t2.txn_date
-                                                         and t1.user_id_txn = t2.user_id
-                                                         and t1.card_type_new= t2.card_type_new
+-- 1. 创建基础中间表：财年首日
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_fy_firstday;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_fy_firstday AS
+SELECT 
+  DATE(calendar_date) AS start_timewindow,
+  fisc_year_num
+FROM cdlcrm.cdl_mstr_calendar
+WHERE fisc_year_day_num = 1
+  AND fisc_year_num = (
+    SELECT fisc_year_num 
+    FROM cdlcrm.cdl_mstr_calendar 
+    WHERE DATE(calendar_date) = DATE(GETDATE() + INTERVAL '8 hours')
+  );
 
-                       )
-         where txn_date is not null
-     )
-        ,
-     -- 2. Reciver Id and info list
-     receiver as (
+-- 2. SA基础信息表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table AS
+SELECT DISTINCT 
+  user_id, 
+  name, 
+  local_name, 
+  store_nbr, 
+  counter_type_code, 
+  region, 
+  region_datail,
+  work_external_user_id
+FROM prd_crm.dlabs.store_view_sa_customer
+WHERE sa_status IN ('0','1','4')
+  AND local_name != 'TW EDA (Temp Store)_OCF23'
+  AND is_key_sa = '1';
 
-         select t1.work_external_user_id,t2.openid,t1.customer_id,t1.card_type_new
-         from (  select work_external_user_id,card_type_new,customer_id
-                 from prd_crm.dlabs.store_view_sa_customer
-                 group by 1,2,3) t1
-                  left join (
-             select openid,id,customer_id
-             from prd_c360.landing.weclient_wx_user_corp_external  group by 1,2,3) t2
-                            on t1.work_external_user_id = t2.id
-     ),
-     -- 3. Filter the msg with customer and between 10:00-22:00
-     filter_msg as(
-         select sender_external_userid as sender,receiver_external_userid as receiver ,
-                cast(msgtime as timestamp) as msgtime,
-                date(cast(msgtime as timestamp)) as msg_date
-         from chat_time_period,max_year
-         where split_part(msgtime,' ',2) between '10:00:00' and '22:00:00'
-           and  brand_code in ('Coach')
-           and sender_external_userid in ( select user_id from sa_table group by 1)
-           and (sender_external_userid  not in ('') or receiver_external_userid  not in (''))
-           and receiver_external_userid not in (select user_id from sa_table group by 1)
-           and date(cast(msgtime as timestamp)) >=fy_start_date
-         group by 1,2,3,4
-     ),
-     -- 4. >60 considered as 1 session or only 1 message without any feedback is also the 1 session
-     session_markers as (
-         select sender,receiver,msg_date,msgtime,
-                case when datediff(minute,lag(msgtime) over (partition by sender,receiver,msg_date order by msgtime),
-                                   msgtime)>60
-                    or lag(msgtime) over (partition by sender,receiver,msg_date order by msgtime) is null
-                         then 1 else 0 end as is_new_session
-         from filter_msg
-     ),
-     -- 5. find fiscal date of the msg_date
-     fiscal_date as (
-         select t1.msg_date,
-                t3.time_period as fiscal_week,
-                t4.time_period as fiscal_month,
-                t5.time_period as fiscal_quarter,
-                t6.time_period as fiscal_year
-         from
-             (select msg_date from session_markers group by 1) t1
-                 left join
-             (select * from prd_crm.dlabs.dlab_calendar where time_period_code in ('Week') ) t3
-             on t1.msg_date between t3.start_date and t3.end_date
-                 left join  (select * from
-                 prd_crm.dlabs.dlab_calendar where time_period_code in ('Month')
-             ) t4
-                            on t1.msg_date between t4.start_date and t4.end_date
-                 left join  (select * from
-                 prd_crm.dlabs.dlab_calendar where time_period_code in ('Quarter')
-             ) t5
-                            on t1.msg_date between t5.start_date and t5.end_date
-                 left join  (select * from
-                 prd_crm.dlabs.dlab_calendar where time_period_code in ('Year')
-             ) t6
-                            on t1.msg_date between t6.start_date and t6.end_date
-     ) ,
+-- 3. 财年日期范围表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_max_year;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_max_year AS
+SELECT 
+  MIN(add_date) AS fy_start_date,
+  MAX(CAST(20 || SUBSTRING(fisc_year, 3, 2) AS INT)) AS year
+FROM prd_crm.dlabs.store_view_sa_customer
+WHERE CAST(20 || SUBSTRING(fisc_year, 3, 2) AS INT) = (
+  SELECT CAST(20 || SUBSTRING(MAX(fisc_year), 3, 2) AS INT) 
+  FROM prd_crm.dlabs.store_view_sa_customer
+);
 
-    key_sa_list as(
-        select user_id,work_external_user_id from dlabs.store_view_sa_customer
-        where sa_status in ('0','1','4')
-          and local_name not in ('TW EDA (Temp Store)_OCF23')
-        and is_key_sa in ('1')
-                 group by 1,2
-    ),
-     session_counts as (
-         select t1.msg_date,fiscal_week,fiscal_month,fiscal_quarter,fiscal_year,
-                sender,name,local_name,store_nbr,counter_type_code,region,region_datail,
-                receiver,t3.work_external_user_id,t3.card_type_new,
-                sum(is_new_session) as is_session,
-                case when sum(is_new_session)>=2 then 1 else 0 end as is_quality_session
-         from session_markers t1
-                  left join (
-             select user_id,name,local_name,store_nbr,counter_type_code,region,region_datail
-             from sa_table
-         ) t2
-                            on t1.sender = t2.user_id
-                  left join receiver t3
-                            on t1.receiver = t3.openid
-                  left join fiscal_date t4
-                            on t1.msg_date = t4.msg_date
-         join  key_sa_list t5
-         on t1.sender = t5.user_id and t3.work_external_user_id = t5.work_external_user_id
-         group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-     ),
-
-
-
-
-     current_period as (
-         select
-             fiscal_year as current_year,
-             max(fiscal_quarter) as current_quarter,
-             max(fiscal_month) as current_month,
-             max(fiscal_week) as current_week,
-             max(msg_date) as current_date
-         from session_counts
-         group by 1
-     ),
-     summary as (
-         select sender  as sa_code,
-                name as sa_name,
-                store_nbr as store_code,
-                local_name as store_name,
-                fiscal_year as year,
-                'DTD' as time_period,
-                replace(msg_date,'-','') as ordinal_number,
-                case when t1.card_type_new in ('DIAMOND,','GOLD','Regular','SILVER') then 2
-                     when t1.card_type_new in ('Non-Member') then 4
-                     else 3 end as type,
-                sum(people) as people,
-                sum(is_session) as commnunation_count,
-                count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                sum(is_quality_session) as quality_commnunation_count,
-                count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                sum(t2.successful_sales_amount) as successful_sales_amount,
-                sum(t2.consumption_amount) as consumption_amount
-         from session_counts t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  add_total t3
-                             on t3.add_date <=t1.msg_date
-                                 and t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         select sender  as sa_code,
-                name as sa_name,
-                store_nbr as store_code,
-                local_name as store_name,
-                fiscal_year as year,
-                'DTD' as time_period,
-                replace(msg_date,'-','') as ordinal_number,
-                1 as type,
-                sum(people) as people,
-                sum(is_session) as commnunation_count,
-                count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                sum(is_quality_session) as quality_commnunation_count,
-                count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                sum(t2.successful_sales_amount) as successful_sales_amount,
-                sum(t2.consumption_amount) as consumption_amount
-         from session_counts t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  add_total t3
-                             on t3.add_date <=t1.msg_date
-                                 and t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         -- 2. 'WTD'
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'WTD' as time_period,
-                 substring(fiscal_week,5,2) as ordinal_number,
-                 case when t1.card_type_new in ('DIAMOND,','GOLD','Regular','SILVER') then 2
-                      when t1.card_type_new in ('Non-Member') then 4
-                      else 3 end as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_week<=current_week ) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on  t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'WTD' as time_period,
-                 substring(fiscal_week,5,2) as ordinal_number,
-                 1 as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_week<=current_week ) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on t3.add_date <=t1.msg_date
-                                 and t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         -- 3. 'MTD'
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'MTD' as time_period,
-                 substring(fiscal_month,5,2) as ordinal_number,
-                 case when t1.card_type_new in ('DIAMOND,','GOLD','Regular','SILVER') then 2
-                      when t1.card_type_new in ('Non-Member') then 4
-                      else 3 end as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_month<=current_month ) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on  t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'MTD' as time_period,
-                 substring(fiscal_month,5,2) as ordinal_number,
-                 1 as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_month<=current_month) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on t3.add_date <=t1.msg_date
-                                 and t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         -- 4. 'QTD'
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'QTD' as time_period,
-                 substring(fiscal_quarter,5,2) as ordinal_number,
-                 case when t1.card_type_new in ('DIAMOND,','GOLD','Regular','SILVER') then 2
-                      when t1.card_type_new in ('Non-Member') then 4
-                      else 3 end as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_quarter<=current_quarter ) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on  t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         select sender  as sa_code,
-                name as sa_name,
-                store_nbr as store_code,
-                local_name as store_name,
-                fiscal_year as year,
-                'QTD' as time_period,
-                substring(fiscal_quarter,5,2) as ordinal_number,
-                1 as type,
-                sum(people) as people,
-                sum(is_session) as commnunation_count,
-                count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                sum(is_quality_session) as quality_commnunation_count,
-                count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                sum(t2.successful_sales_amount) as successful_sales_amount,
-                sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_quarter<=current_quarter) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on t3.add_date <=t1.msg_date
-                                 and t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         -- 5. 'YTD'
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'YTD' as time_period,
-                 cast(fiscal_year as varchar) as ordinal_number,
-                 case when t1.card_type_new in ('DIAMOND,','GOLD','Regular','SILVER') then 2
-                      when t1.card_type_new in ('Non-Member') then 4
-                      else 3 end as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_year=current_year ) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on  t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-         union all
-         select  sender  as sa_code,
-                 name as sa_name,
-                 store_nbr as store_code,
-                 local_name as store_name,
-                 fiscal_year as year,
-                 'YTD' as time_period,
-                 cast(fiscal_year as varchar)  as ordinal_number,
-                 1 as type,
-                 sum(people) as people,
-                 sum(is_session) as commnunation_count,
-                 count(distinct case when is_session>= 1 then receiver end ) as commnunation_people_count,
-                 sum(is_quality_session) as quality_commnunation_count,
-                 count(distinct case when is_quality_session= 1 then receiver end ) as quality_commnunation_people_count,
-                 sum(t2.successful_sales_amount) as successful_sales_amount,
-                 sum(t2.consumption_amount) as consumption_amount
-         from (select * from session_counts,current_period where fiscal_year=current_year) t1
-                  left join  amout_summary_sep t2
-                             on t1.msg_date = t2.txn_date
-                                 and t1.sender = t2.user_id
-                                 and t1.card_type_new = t2.card_type_new
-                  left join  (select * from add_total,current_period where add_date <=current_date)  t3
-                             on t3.add_date <=t1.msg_date
-                                 and t1.sender = t3.user_id
-                                 and t1.card_type_new = t3.card_type_new
-         group by 1,2,3,4,5,6,7,8
-     )
-select
-    (select max(add_date) from add_total) as data_date,
-    t1.*
-from  summary  t1
-
+-- 4. 新增客户统计表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total AS
+SELECT 
+  add_date,
+  user_id,
+  card_type_new,
+  COUNT(DISTINCT work_external_user_id) AS people
+FROM (
+  SELECT
+    work_external_user_id,
+    user_id,
+    name,
+    add_date,
+    card_type_new
+  FROM prd_crm.dlabs.store_view_sa_customer 
+  WHERE user_id IS NOT NULL 
+    AND add_rank = 1
+    AND is_key_sa = '1'
+    AND add_date > '1970-01-01'
+  GROUP BY 1,2,3,4,5
 )
+GROUP BY 1,2,3;
 
+-- 5. 成功销售金额表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_successful_sales_amount;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_successful_sales_amount AS
+SELECT
+  txn_date,
+  user_id_txn,
+  card_type_new,
+  SUM(demand) AS successful_sales_amount
+FROM (
+  SELECT
+    work_external_user_id,
+    customer_id,
+    card_type_new,
+    txn_nbr,
+    txn_date,
+    user_id_txn,
+    demand
+  FROM prd_crm.dlabs.store_view_sa_customer
+  WHERE user_id_txn IS NOT NULL
+    AND is_key_sa = '1'
+  GROUP BY 1,2,3,4,5,6,7
+) 
+GROUP BY 1,2,3;
 
+-- 6. 消费金额表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_consumption_amount;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_consumption_amount AS
+SELECT
+  txn_date,
+  user_id,
+  card_type_new,
+  SUM(demand) AS consumption_amount
+FROM (
+  SELECT
+    work_external_user_id,
+    user_id,
+    name,
+    txn_date,
+    txn_nbr,
+    card_type_new,
+    demand
+  FROM prd_crm.dlabs.store_view_sa_customer 
+  WHERE user_id IS NOT NULL
+    AND is_key_sa = '1'
+  GROUP BY 1,2,3,4,5,6,7
+) 
+GROUP BY 1,2,3;
 
+-- 7. 金额汇总表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep AS
+SELECT 
+  COALESCE(t1.txn_date,t2.txn_date) AS txn_date,
+  COALESCE(t1.user_id_txn,t2.user_id) AS user_id,
+  COALESCE(t1.card_type_new,t2.card_type_new) AS card_type_new,
+  t1.successful_sales_amount,
+  t2.consumption_amount
+FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_successful_sales_amount t1
+FULL OUTER JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_consumption_amount t2
+  ON t1.txn_date = t2.txn_date
+  AND t1.user_id_txn = t2.user_id
+  AND t1.card_type_new = t2.card_type_new
+WHERE COALESCE(t1.txn_date,t2.txn_date) IS NOT NULL;
 
+-- 8. 接收者信息表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver AS
+SELECT 
+  t1.work_external_user_id,
+  t2.openid,
+  t1.customer_id,
+  t1.card_type_new
+FROM (
+  SELECT 
+    work_external_user_id,
+    card_type_new,
+    customer_id
+  FROM prd_crm.dlabs.store_view_sa_customer
+  GROUP BY 1,2,3
+) t1
+LEFT JOIN (
+  SELECT 
+    openid,
+    id,
+    customer_id
+  FROM prd_c360.landing.weclient_wx_user_corp_external  
+  GROUP BY 1,2,3
+) t2 ON t1.work_external_user_id = t2.id;
 
+-- 9. 聊天记录基础表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_chat_base;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_chat_base AS
+SELECT 
+  c.sender_external_userid AS sender,
+  c.receiver_external_userid AS receiver,
+  CAST(c.msgtime AS TIMESTAMP) AS msgtime,
+  DATE(CAST(c.msgtime AS TIMESTAMP)) AS msg_date
+FROM prd_crm.cdlcrm.cdl_customer_sa_wecom_chat c
+JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_fy_firstday fy 
+  ON DATE(CAST(c.msgtime AS TIMESTAMP)) BETWEEN fy.start_timewindow AND DATE(GETDATE() + INTERVAL '8 hours')
+WHERE SPLIT_PART(c.msgtime,' ',2) BETWEEN '10:00:00' AND '22:00:00'
+  AND c.brand_code = 'Coach'
+  AND c.sender_external_userid IN (SELECT user_id FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table)
+  AND (c.sender_external_userid != '' OR c.receiver_external_userid != '')
+  AND c.receiver_external_userid NOT IN (SELECT user_id FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table);
 
+-- 10. 会话标记表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers AS
+SELECT 
+  sender,
+  receiver,
+  msg_date,
+  msgtime,
+  CASE 
+    WHEN DATEDIFF(minute, LAG(msgtime) OVER (PARTITION BY sender, receiver, msg_date ORDER BY msgtime), msgtime) > 60
+    OR LAG(msgtime) OVER (PARTITION BY sender, receiver, msg_date ORDER BY msgtime) IS NULL 
+    THEN 1 
+    ELSE 0 
+  END AS is_new_session
+FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_chat_base;
 
+-- 11. 财年日历表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_fiscal_date;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_fiscal_date AS
+SELECT 
+  d.msg_date,
+  w.time_period AS fiscal_week,
+  m.time_period AS fiscal_month,
+  q.time_period AS fiscal_quarter,
+  y.time_period AS fiscal_year
+FROM (
+  SELECT DISTINCT msg_date 
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_chat_base
+) d
+LEFT JOIN prd_crm.dlabs.dlab_calendar w 
+  ON d.msg_date BETWEEN w.start_date AND w.end_date AND w.time_period_code = 'Week'
+LEFT JOIN prd_crm.dlabs.dlab_calendar m 
+  ON d.msg_date BETWEEN m.start_date AND m.end_date AND m.time_period_code = 'Month'
+LEFT JOIN prd_crm.dlabs.dlab_calendar q 
+  ON d.msg_date BETWEEN q.start_date AND q.end_date AND q.time_period_code = 'Quarter'
+LEFT JOIN prd_crm.dlabs.dlab_calendar y 
+  ON d.msg_date BETWEEN y.start_date AND y.end_date AND y.time_period_code = 'Year';
 
+-- 12. 关键指标中间表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts AS
+SELECT 
+  s.msg_date,
+  f.fiscal_week,
+  f.fiscal_month,
+  f.fiscal_quarter,
+  f.fiscal_year,
+  s.sender AS user_id,
+  sa.name,
+  sa.local_name,
+  sa.store_nbr,
+  sa.counter_type_code,
+  sa.region,
+  sa.region_datail,
+  s.receiver,
+  r.work_external_user_id,
+  r.card_type_new,
+  SUM(s.is_new_session) AS is_session,
+  CASE WHEN SUM(s.is_new_session) >= 2 THEN 1 ELSE 0 END AS is_quality_session
+FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers s
+JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table sa 
+  ON s.sender = sa.user_id
+JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver r
+  ON s.receiver = r.openid
+JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_fiscal_date f 
+  ON s.msg_date = f.msg_date
+JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table k
+  ON s.sender = k.user_id AND r.work_external_user_id = k.work_external_user_id
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15;
 
+-- 13. 当前周期表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period AS
+SELECT 
+  fiscal_year AS current_year,
+  MAX(fiscal_quarter) AS current_quarter,
+  MAX(fiscal_month) AS current_month,
+  MAX(fiscal_week) AS current_week,
+  MAX(msg_date) AS current_date
+FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts
+GROUP BY fiscal_year;
+
+-- 14. 最终结果表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach;
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach AS
+WITH summary AS (
+  -- DTD类型2-4
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'DTD' AS time_period,
+    REPLACE(t1.msg_date,'-','') AS ordinal_number,
+    CASE 
+      WHEN t1.card_type_new IN ('DIAMOND,','GOLD','Regular','SILVER') THEN 2
+      WHEN t1.card_type_new IN ('Non-Member') THEN 4
+      ELSE 3 
+    END AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total t3
+    ON t3.add_date <= t1.msg_date
+    AND t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- DTD类型1
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'DTD' AS time_period,
+    REPLACE(t1.msg_date,'-','') AS ordinal_number,
+    1 AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total t3
+    ON t3.add_date <= t1.msg_date
+    AND t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- WTD类型2-4
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'WTD' AS time_period,
+    SUBSTRING(t1.fiscal_week,5,2) AS ordinal_number,
+    CASE 
+      WHEN t1.card_type_new IN ('DIAMOND,','GOLD','Regular','SILVER') THEN 2
+      WHEN t1.card_type_new IN ('Non-Member') THEN 4
+      ELSE 3 
+    END AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_week <= cp.current_week
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- WTD类型1
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'WTD' AS time_period,
+    SUBSTRING(t1.fiscal_week,5,2) AS ordinal_number,
+    1 AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_week <= cp.current_week
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- MTD类型2-4
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'MTD' AS time_period,
+    SUBSTRING(t1.fiscal_month,5,2) AS ordinal_number,
+    CASE 
+      WHEN t1.card_type_new IN ('DIAMOND,','GOLD','Regular','SILVER') THEN 2
+      WHEN t1.card_type_new IN ('Non-Member') THEN 4
+      ELSE 3 
+    END AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_month <= cp.current_month
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- MTD类型1
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'MTD' AS time_period,
+    SUBSTRING(t1.fiscal_month,5,2) AS ordinal_number,
+    1 AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_month <= cp.current_month
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- QTD类型2-4
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'QTD' AS time_period,
+    SUBSTRING(t1.fiscal_quarter,5,2) AS ordinal_number,
+    CASE 
+      WHEN t1.card_type_new IN ('DIAMOND,','GOLD','Regular','SILVER') THEN 2
+      WHEN t1.card_type_new IN ('Non-Member') THEN 4
+      ELSE 3 
+    END AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_quarter <= cp.current_quarter
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- QTD类型1
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'QTD' AS time_period,
+    SUBSTRING(t1.fiscal_quarter,5,2) AS ordinal_number,
+    1 AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_quarter <= cp.current_quarter
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- YTD类型2-4
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'YTD' AS time_period,
+    CAST(t1.fiscal_year AS VARCHAR) AS ordinal_number,
+    CASE 
+      WHEN t1.card_type_new IN ('DIAMOND,','GOLD','Regular','SILVER') THEN 2
+      WHEN t1.card_type_new IN ('Non-Member') THEN 4
+      ELSE 3 
+    END AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_year = cp.current_year
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+  
+  UNION ALL
+  
+  -- YTD类型1
+  SELECT 
+    t1.user_id AS sa_code,
+    t1.name AS sa_name,
+    t1.store_nbr AS store_code,
+    t1.local_name AS store_name,
+    t1.fiscal_year AS year,
+    'YTD' AS time_period,
+    CAST(t1.fiscal_year AS VARCHAR) AS ordinal_number,
+    1 AS type,
+    SUM(t3.people) AS people,
+    SUM(t1.is_session) AS commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_session >= 1 THEN t1.receiver END) AS commnunation_people_count,
+    SUM(t1.is_quality_session) AS quality_commnunation_count,
+    COUNT(DISTINCT CASE WHEN t1.is_quality_session = 1 THEN t1.receiver END) AS quality_commnunation_people_count,
+    SUM(t2.successful_sales_amount) AS successful_sales_amount,
+    SUM(t2.consumption_amount) AS consumption_amount
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts t1
+  JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period cp
+    ON t1.fiscal_year = cp.current_year
+  LEFT JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep t2
+    ON t1.msg_date = t2.txn_date
+    AND t1.user_id = t2.user_id
+    AND t1.card_type_new = t2.card_type_new
+  LEFT JOIN (
+    SELECT * 
+    FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total
+    JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period
+      ON add_date <= current_date
+  ) t3
+    ON t1.user_id = t3.user_id
+    AND t1.card_type_new = t3.card_type_new
+  GROUP BY 1,2,3,4,5,6,7,8
+)
+SELECT
+  (SELECT MAX(add_date) FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total) AS data_date,
+  t1.*
+FROM summary t1;
+
+-- 15. 清理中间表
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_fy_firstday;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_max_year;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_add_total;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_successful_sales_amount;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_consumption_amount;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_amout_summary_sep;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_chat_base;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_fiscal_date;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts;
+DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period;
