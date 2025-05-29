@@ -222,8 +222,7 @@ WITH pre_agg AS (
     s.msg_date,
     s.sender,
     s.receiver,
-    SUM(s.is_new_session) AS total_sessions,
-    BOOL_OR(total_sessions >= 2)::INT AS is_quality_session
+    SUM(s.is_new_session) AS total_sessions
   FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers s
   GROUP BY 1,2,3
 )
@@ -244,7 +243,8 @@ SELECT
   r.work_external_user_id,
   r.card_type_new,
   p.total_sessions AS is_session,
-  p.is_quality_session
+  -- 在外部计算质量会话标记
+  CASE WHEN p.total_sessions >= 2 THEN 1 ELSE 0 END AS is_quality_session
 FROM pre_agg p
 JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table sa 
   ON p.sender = sa.user_id
