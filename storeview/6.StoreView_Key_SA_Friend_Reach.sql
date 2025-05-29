@@ -1,3 +1,4 @@
+SET enable_result_cache_for_session TO ON;
 -- 1. 创建基础中间表：财年首日
 DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_fy_firstday;
 CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_fy_firstday AS
@@ -14,7 +15,8 @@ WHERE fisc_year_day_num = 1
 
 -- 2. SA基础信息表
 DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table;
-CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table AS
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table
+DISTKEY(user_id) SORTKEY(user_id) AS
 SELECT DISTINCT 
   user_id, 
   name, 
@@ -131,7 +133,8 @@ WHERE COALESCE(t1.txn_date,t2.txn_date) IS NOT NULL;
 
 -- 8. 接收者信息表
 DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver;
-CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver AS
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver
+DISTKEY(openid) SORTKEY(openid) AS
 SELECT 
   t1.work_external_user_id,
   t2.openid,
@@ -173,7 +176,8 @@ WHERE SPLIT_PART(c.msgtime,' ',2) BETWEEN '10:00:00' AND '22:00:00'
 
 -- 10. 会话标记表
 DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers;
-CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers AS
+CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers
+DISTKEY(sender) SORTKEY(sender, receiver, msg_date) AS
 SELECT 
   sender,
   receiver,
@@ -211,35 +215,43 @@ LEFT JOIN prd_crm.dlabs.dlab_calendar y
 
 -- 12. 关键指标中间表
 DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts;
+-- 先预聚合指标再JOIN维度
 CREATE TABLE prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_counts AS
+WITH pre_agg AS (
+  SELECT
+    s.msg_date,
+    s.sender,
+    s.receiver,
+    SUM(s.is_new_session) AS total_sessions,
+    BOOL_OR(total_sessions >= 2)::INT AS is_quality_session
+  FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers s
+  GROUP BY 1,2,3
+)
 SELECT 
-  s.msg_date,
+  p.msg_date,
   f.fiscal_week,
   f.fiscal_month,
   f.fiscal_quarter,
   f.fiscal_year,
-  s.sender AS user_id,
+  p.sender AS user_id,
   sa.name,
   sa.local_name,
   sa.store_nbr,
   sa.counter_type_code,
   sa.region,
   sa.region_datail,
-  s.receiver,
+  p.receiver,
   r.work_external_user_id,
   r.card_type_new,
-  SUM(s.is_new_session) AS is_session,
-  CASE WHEN SUM(s.is_new_session) >= 2 THEN 1 ELSE 0 END AS is_quality_session
-FROM prd_crm.stage.StoreView_Key_SA_Friend_Reach_session_markers s
+  p.total_sessions AS is_session,
+  p.is_quality_session
+FROM pre_agg p
 JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table sa 
-  ON s.sender = sa.user_id
+  ON p.sender = sa.user_id
 JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_receiver r
-  ON s.receiver = r.openid
+  ON p.receiver = r.openid
 JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_fiscal_date f 
-  ON s.msg_date = f.msg_date
-JOIN prd_crm.stage.StoreView_Key_SA_Friend_Reach_sa_table k
-  ON s.sender = k.user_id AND r.work_external_user_id = k.work_external_user_id
-GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15;
+  ON p.msg_date = f.msg_date;
 
 -- 13. 当前周期表
 DROP TABLE IF EXISTS prd_crm.stage.StoreView_Key_SA_Friend_Reach_current_period;
