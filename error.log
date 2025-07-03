@@ -1,5 +1,1 @@
-Trigger trigger = newTrigger()
-                .withIdentity("trigger1", "group1")
-                .withSchedule(cronSchedule("5 0 0 * * ?")
-                    .inTimeZone(TimeZone.getTimeZone("Asia/Shanghai")))
-                .build();
+select * from prd_ds.tpr_dlabs_data_automation.agg_competitor_sales_collection_tmp where brand_name = 'Adidas'
